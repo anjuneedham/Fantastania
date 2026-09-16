@@ -141,6 +141,11 @@ export class Game {
 
     this.controls.update(this.renderer, this.camera, dt);
 
+    // Real elapsed frame time, kept separate from the simulation dt below:
+    // per-frame UI work (input sampling, menu animation) must keep running at
+    // display rate even when the sim is paused or runs zero fixed steps.
+    const frameDt = dt;
+
     if (this.paused) dt = 0;
     this.accumulator += dt;
     let steps = 0;
@@ -155,6 +160,10 @@ export class Game {
 
     // Overlay scenes still need a heartbeat while the sim is paused.
     if (this.paused) this.scenes.update(0);
+
+    // Must run after the fixed-step loop and before render: it samples input
+    // edges that `Input.endFrame()` clears at the bottom of this same frame.
+    this.scenes.frameUpdate(frameDt);
 
     this.stats.drawCalls = 0;
     this.renderer.begin();

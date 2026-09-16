@@ -30,9 +30,16 @@ export class CharacterSelectScene extends Scene {
     for (const id of CHARACTER_IDS) this.poses.set(id, createPose());
   }
 
+  override suspend(): void {
+    this.pointer.reset();
+  }
+
+  override frameUpdate(): void {
+    this.pointer.update(this.game.controls.input);
+  }
+
   override update(dt: number): void {
     this.t += dt;
-    this.pointer.update(this.game.controls.input);
     for (const [id, pose] of this.poses) {
       pose.animTime += dt;
       pose.moveSpeed01 = id === this.selected ? 0.55 : 0;

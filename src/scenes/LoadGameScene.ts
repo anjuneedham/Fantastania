@@ -26,7 +26,11 @@ export class LoadGameScene extends Scene {
     this.slots = save ? await save.listSlots() : [];
   }
 
-  override update(): void {
+  override suspend(): void {
+    this.pointer.reset();
+  }
+
+  override frameUpdate(): void {
     this.pointer.update(this.game.controls.input);
   }
 

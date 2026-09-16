@@ -16,7 +16,11 @@ export class SettingsScene extends Scene {
   override readonly transparent = true;
   private pointer = new PointerTracker();
 
-  override update(): void {
+  override suspend(): void {
+    this.pointer.reset();
+  }
+
+  override frameUpdate(): void {
     this.pointer.update(this.game.controls.input);
   }
 

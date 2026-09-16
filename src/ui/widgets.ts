@@ -128,6 +128,28 @@ export class PointerTracker {
   consumeClick(): void {
     this.justClicked = false;
   }
+
+  /**
+   * Drops all transient pointer state and releases any claimed touch pointer.
+   *
+   * Call this when the owning scene stops being the active one. `update` is
+   * what would normally clear `justClicked` on the following tick, but a
+   * covered scene never gets another `update` — while it does keep getting
+   * `render`, and the widget helpers both draw and consume click state in the
+   * same call. Without this, the click that dismissed a scene could be read a
+   * second time by the menu underneath it, on every frame it stayed covered.
+   */
+  reset(): void {
+    this.justClicked = false;
+    this.isDown = false;
+    this.touchId = null;
+    this.clickX = -1;
+    this.clickY = -1;
+    this.downX = -1;
+    this.downY = -1;
+    this.hoverX = -1;
+    this.hoverY = -1;
+  }
 }
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';

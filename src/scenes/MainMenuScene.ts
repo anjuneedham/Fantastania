@@ -55,8 +55,15 @@ export class MainMenuScene extends Scene {
     this.game.audio.playMusic('theme_menu');
   }
 
+  override suspend(): void {
+    this.pointer.reset();
+  }
+
   override update(dt: number): void {
     this.t += dt;
+  }
+
+  override frameUpdate(): void {
     this.pointer.update(this.game.controls.input);
   }
 

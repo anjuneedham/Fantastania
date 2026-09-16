@@ -24,6 +24,23 @@ export abstract class Scene {
   resume(): void {}
 
   update(_dt: number): void {}
+
+  /**
+   * Called once per rendered frame, on the ACTIVE scene only, just before
+   * render. `update` is not a substitute for either half of that:
+   *
+   * - It runs on the fixed simulation timestep, so on a display faster than
+   *   60Hz most frames run no update at all, and on a slow frame it runs
+   *   several. Anything that samples input edges (`justPressed`-style flags,
+   *   which live for exactly one rendered frame) must not be tied to it.
+   * - It is skipped for scenes covered by a pushed scene, while `render`
+   *   keeps being called on them for overlay backdrops — so state sampled in
+   *   `update` can go stale underneath a `render` that still reads it.
+   *
+   * Sample per-frame input here; keep simulation in `update`.
+   */
+  frameUpdate(_dt: number): void {}
+
   render(_r: Renderer): void {}
   onResize(): void {}
 

@@ -90,6 +90,17 @@ export class SceneManager {
     for (let i = start; i < this.stack.length; i++) this.stack[i].update(dt);
   }
 
+  /**
+   * Per-rendered-frame tick for the active scene only. Deliberately not
+   * walked down the stack like `update`/`render`: a covered scene must not
+   * keep sampling input it cannot act on (its widgets are not reachable),
+   * which is exactly what let a covered menu misread a click meant for the
+   * scene above it.
+   */
+  frameUpdate(dt: number): void {
+    this.active?.frameUpdate(dt);
+  }
+
   render(r: Renderer): void {
     let start = this.stack.length - 1;
     while (start > 0 && this.stack[start].transparent) start--;
