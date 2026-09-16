@@ -7,6 +7,7 @@ import { startNewGame } from './game/newGame';
 import { initSaves } from './game/saves';
 import * as inventory from './game/systems/InventorySystem';
 import * as skills from './game/systems/SkillSystem';
+import * as hud from './ui/hud';
 import { bus } from './game/events';
 import { dialogue } from './game/systems/DialogueSystem';
 import { quests } from './game/systems/QuestSystem';
@@ -69,7 +70,7 @@ async function main(): Promise<void> {
   // fresh game), documented here rather than hidden in the test file.
   (window as unknown as { fantastania?: unknown }).fantastania = {
     game, state, areas: AREAS, abilities: ABILITIES,
-    inventory, skills, saves, quests, dialogue, bus,
+    inventory, skills, hud, saves, quests, dialogue, bus,
     skipToWorld: (characterId: string) => {
       startNewGame(characterId);
       game.controls.gameplayEnabled = true;

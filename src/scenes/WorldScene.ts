@@ -28,6 +28,8 @@ import { World } from '../game/World';
 import { WorldRenderer } from '../game/WorldRenderer';
 import { renderPad } from '../ui/padRenderer';
 import { toasts } from '../ui/toasts';
+import { renderHud, updateActionPad } from '../ui/hud';
+import { PauseScene, type PauseTab } from './PauseScene';
 
 /**
  * The gameplay scene: owns the World, drives the player, and handles area
@@ -67,6 +69,16 @@ export class WorldScene extends Scene {
   private transitioning = false;
   private bossStarted = false;
   private deathHandled = false;
+  /**
+   * Guards the pause-menu shortcut keys against the fixed-timestep loop
+   * calling `update()` more than once per rendered frame: a keyboard `pressed`
+   * flag stays true for every fixed step within that frame (it is only
+   * cleared once, in `Input.endFrame()`), so without this a single Escape
+   * press could queue several stacked PauseScene pushes. Set the moment a
+   * push is queued, cleared in `resume()` once the menu closes and this scene
+   * is active again.
+   */
+  private menuOpening = false;
 
   override async enter(): Promise<void> {
     const { game } = this;
@@ -101,6 +113,25 @@ export class WorldScene extends Scene {
     dialogue.end();
     for (const off of this.unsubscribes) off();
     this.unsubscribes.length = 0;
+  }
+
+  /** Called when PauseScene (or Settings pushed from it) pops back to here. */
+  override resume(): void {
+    this.menuOpening = false;
+  }
+
+  /** Android/browser back opens the pause menu rather than exiting the app. */
+  override onBack(): boolean {
+    if (this.inDialogue || this.transitioning || this.menuOpening) return false;
+    this.openMenu('character');
+    return true;
+  }
+
+  private openMenu(tab: PauseTab): void {
+    if (this.menuOpening) return;
+    this.menuOpening = true;
+    this.game.controls.pad.releaseAll();
+    this.game.scenes.push(new PauseScene(this, tab));
   }
 
   private unsubscribes: Array<() => void> = [];
@@ -243,6 +274,26 @@ export class WorldScene extends Scene {
     void this.autosave();
   }
 
+  /**
+   * The pause-menu shortcut keys are read here rather than in `update()`.
+   * `update()` only runs inside the fixed-timestep loop, which is gated on
+   * the frame's accumulated time reaching one whole step — on a fast or
+   * uneven frame (headless Chromium in particular, with no display vsync to
+   * pace it) that can be zero steps, so a keyboard edge that arrived this
+   * frame is never read before `Input.endFrame()` clears it at the end of
+   * the same frame. `frameUpdate()` runs exactly once per rendered frame
+   * regardless, which is what a single `pressed()` edge actually needs.
+   */
+  override frameUpdate(): void {
+    if (this.inDialogue || this.transitioning || this.menuOpening) return;
+    const controls = this.game.controls;
+    if (controls.pressed('pause')) this.openMenu('character');
+    else if (controls.pressed('bag')) this.openMenu('inventory');
+    else if (controls.pressed('skills')) this.openMenu('skills');
+    else if (controls.pressed('quests')) this.openMenu('quests');
+    else if (controls.pressed('character')) this.openMenu('character');
+  }
+
   override update(dt: number): void {
     if (this.transitioning) return;
     const { game } = this;
@@ -256,6 +307,8 @@ export class WorldScene extends Scene {
       toasts.update(dt);
       return;
     }
+
+    if (this.menuOpening) return;
 
     // Hit-stop: the world freezes for a few frames on a solid connect, while
     // UI and effects keep running on the real delta.
@@ -285,6 +338,7 @@ export class WorldScene extends Scene {
     this.checkDiscoveries();
     this.updateBoss();
     this.updateDeath(dt);
+    updateActionPad(game.controls.pad, this.player);
 
     // Keep the save's mirrored pools current so a reload resumes mid-fight.
     state.currentHealth = this.player.health;
@@ -486,12 +540,15 @@ export class WorldScene extends Scene {
     ctx.restore();
 
     this.renderer.renderLighting(ctx, r);
+    if (!this.inDialogue && this.game.scenes.active === this) renderHud(ctx, r, this.player);
     if (this.inDialogue) this.dialogueView.render(ctx, dialogue, r);
     toasts.render(ctx, r);
     this.renderDebug(ctx, r);
     ctx.restore();
 
-    if (!this.inDialogue) renderPad(ctx, this.game.controls.pad, r);
+    // A pause/settings panel on top draws its own controls; the touch pad
+    // must not keep receiving input (or drawing) underneath it.
+    if (!this.inDialogue && this.game.scenes.active === this) renderPad(ctx, this.game.controls.pad, r);
   }
 
   private renderDebug(ctx: CanvasRenderingContext2D, r: Renderer): void {

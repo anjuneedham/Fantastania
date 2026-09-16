@@ -865,6 +865,207 @@ scenario('settings-flow', 'desktop', async (page, t) => {
   t.assert(closed === 'MainMenuScene', 'Done returns to the title screen');
 });
 
+/**
+ * Computes the pause panel's rect the same way PauseScene.render() does. The
+ * panel is 720x500 at every viewport this game supports — MIN_VIEW_WIDTH is
+ * 780, so `Math.min(720, viewWidth - 40)` is always 720 — which is what makes
+ * clicking fixed offsets into it reliable across a resize.
+ */
+async function pausePanelGeom(page) {
+  return page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const w = Math.min(720, r.viewWidth - 40);
+    const h = Math.min(500, r.viewHeight - 40);
+    return { x: r.viewWidth / 2 - w / 2, y: r.viewHeight / 2 - h / 2, w, h };
+  });
+}
+
+scenario('pause-menu-flow', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+
+  // Escape is the real keybinding a keyboard player uses; WorldScene reads it
+  // through the same `controls.pressed('pause')` path a controller or the
+  // touch pad's pause button would.
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor.name === 'PauseScene',
+    null, { timeout: 4000 },
+  );
+  t.assert(true, 'Escape opens the pause menu and freezes the world');
+
+  const frozen = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active.world;
+    const before = { x: s.player.x, y: s.player.y };
+    await new Promise((res) => setTimeout(res, 300));
+    return { before, after: { x: s.player.x, y: s.player.y } };
+  });
+  t.assert(frozen.before.x === frozen.after.x && frozen.before.y === frozen.after.y,
+    'the world stops simulating while paused');
+
+  const geom = await pausePanelGeom(page);
+  const tabY = geom.y + 46 + 17;
+  const tabW = (geom.w - 40) / 4;
+  const tabX0 = geom.x + 20;
+
+  // Pack tab: equip a weapon by clicking the item cell, then the Equip button
+  // — a real click through PointerTracker and button(), not a direct call.
+  await page.evaluate(() => window.fantastania.inventory.addItem('woodcuttersAxe', 1, false));
+  await t.viewClick(page, tabX0 + tabW * 1.5, tabY);
+  const tab = await page.evaluate(() => window.fantastania.game.scenes.active.tab);
+  t.assert(tab === 'inventory', `clicking the Pack tab switches to it (${tab})`);
+
+  await t.viewClick(page, geom.x + 20 + 29, geom.y + 92 + 18 + 29);
+  // Weapon + not-quest: both Equip and Sell render, stacked from the bottom.
+  const detailX = geom.x + 496;
+  const detailBottom = geom.y + 92 + (geom.h - 148);
+  await t.viewClick(page, detailX + 102, detailBottom - 72 + 15);
+  const equipped = await page.evaluate(() => window.fantastania.state.equipment.weapon);
+  t.assert(equipped === 'woodcuttersAxe', `clicking Equip in the pack updated the loadout (${equipped})`);
+
+  // Skills tab: click the first node, then Learn.
+  await t.viewClick(page, tabX0 + tabW * 2.5, tabY);
+  await page.evaluate(() => { window.fantastania.state.skillPoints = 3; });
+  const before = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active.world;
+    return { points: window.fantastania.state.skillPoints, vitality: s.player.stats.total.vitality };
+  });
+  const treeX = geom.x + 20;
+  const treeY = geom.y + 92 + 30;
+  await t.viewClick(page, treeX + 34, treeY + 34);
+  await t.viewClick(page, detailX + 102, detailBottom - 36 + 15);
+  const after = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active.world;
+    return { points: window.fantastania.state.skillPoints, vitality: s.player.stats.total.vitality };
+  });
+  t.assert(after.points === before.points - 1, `clicking a skill node spent a point (${after.points})`);
+  t.assert(after.vitality > before.vitality,
+    `learning it raised vitality (${before.vitality} to ${after.vitality})`);
+
+  // Quests tab: accept a side quest directly (as quest-lifecycle does), then
+  // abandon it through the real two-tap Abandon button.
+  await page.evaluate(() => window.fantastania.quests.accept('peltsForGarrick'));
+  await t.viewClick(page, tabX0 + tabW * 3.5, tabY);
+  const cardY = geom.y + 92;
+  const abandonX = geom.x + 20 + (geom.w - 40) - 49;
+  const abandonY = cardY + 86 - 18;
+  await t.viewClick(page, abandonX, abandonY);
+  await t.viewClick(page, abandonX, abandonY);
+  const abandoned = await page.evaluate(
+    () => !window.fantastania.state.questProgressFor('peltsForGarrick'),
+  );
+  t.assert(abandoned, 'the two-tap Abandon button removed the quest');
+
+  // Save writes the autosave slot without leaving the menu.
+  await t.viewClick(page, tabX0 + tabW * 0.5, tabY);
+  const savedAtBefore = (await page.evaluate(
+    () => window.fantastania.saves.listSlots(),
+  ))[0].savedAt;
+  await page.waitForTimeout(20);
+  await t.viewClick(page, geom.x + 130 + 45, geom.y + geom.h - 44 + 16);
+  await page.waitForTimeout(150);
+  const savedAtAfter = (await page.evaluate(
+    () => window.fantastania.saves.listSlots(),
+  ))[0].savedAt;
+  t.assert(savedAtAfter > savedAtBefore, 'the Save button wrote a fresh autosave');
+
+  // Resume closes the menu and hands control back to the world.
+  await t.viewClick(page, geom.x + 310 + 50, geom.y + geom.h - 44 + 16);
+  const resumed = await page.evaluate(() => window.fantastania.game.scenes.active.constructor.name);
+  t.assert(resumed === 'WorldScene', 'Resume returns control to the world');
+});
+
+scenario('pause-menu-quit', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  await page.evaluate(() => { window.fantastania.state.gold = 4321; });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor.name === 'PauseScene',
+    null, { timeout: 4000 },
+  );
+
+  const geom = await pausePanelGeom(page);
+  const footerY = geom.y + geom.h - 44 + 16;
+  const quitCenter = geom.x + 530 + 85;
+
+  // First tap arms the confirm; the menu must still be open and unchanged.
+  await t.viewClick(page, quitCenter, footerY);
+  const armed = await page.evaluate(() => window.fantastania.game.scenes.active.constructor.name);
+  t.assert(armed === 'PauseScene', 'quitting needs a second tap to confirm');
+
+  await t.viewClick(page, quitCenter, footerY);
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor.name === 'MainMenuScene',
+    null, { timeout: 4000 },
+  );
+  t.assert(true, 'confirming Quit to Title returns to the title screen');
+
+  const saved = (await page.evaluate(() => window.fantastania.saves.listSlots()))[0];
+  t.assert(saved.summary?.gold === 4321, `quitting autosaved first (${saved.summary?.gold}g)`);
+});
+
+scenario('action-pad-abilities', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const result = await page.evaluate(() => {
+    const { hud } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    const pad = window.fantastania.game.controls.pad;
+    const abilityId = window.fantastania.state.loadout.ability1;
+
+    hud.updateActionPad(pad, s.player);
+    const idleGlyph = pad.buttons.get('ability1').glyph;
+
+    s.player.cooldowns[abilityId] = 4;
+    hud.updateActionPad(pad, s.player);
+    const btn = pad.buttons.get('ability1');
+    return { idleGlyph, abilityId, cooldown: btn.cooldown, enabled: btn.enabled };
+  });
+  t.assert(result.idleGlyph.length > 0 && result.idleGlyph !== '—',
+    `the pad picked up ability1's glyph (${result.idleGlyph})`);
+  t.assert(result.cooldown > 0 && result.cooldown <= 1,
+    `an active cooldown drives the pad button's sweep (${result.cooldown.toFixed(2)})`);
+  t.assert(!result.enabled, 'the button reads disabled while on cooldown');
+});
+
+scenario('pause-menu-touch', 'phone', async (page, t) => {
+  await t.waitForBoot(page);
+  const box = page.locator('#game-canvas');
+
+  // A touch anywhere makes the pad (and its Bag/Pause buttons) visible —
+  // same first step as touch-joystick, tapping the joystick's own zone so
+  // this doesn't also claim the button we are about to tap.
+  await box.dispatchEvent('pointerdown', {
+    pointerId: 3, pointerType: 'touch', clientX: 150, clientY: 300, isPrimary: true, button: 0,
+  });
+  await box.dispatchEvent('pointerup', {
+    pointerId: 3, pointerType: 'touch', clientX: 150, clientY: 300, isPrimary: true,
+  });
+  await page.waitForTimeout(100);
+
+  // Real screen coordinates for the Bag button, converted the same way
+  // Input.toView does in reverse — this taps the actual rendered button
+  // rather than assuming a layout, so it breaks if the button ever moves.
+  const bag = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const btn = window.fantastania.game.controls.pad.buttons.get('bag');
+    const rect = r.canvas.getBoundingClientRect();
+    const cssScale = r.scale / r.dpr;
+    return { x: rect.left + r.offsetX + btn.x * cssScale, y: rect.top + r.offsetY + btn.y * cssScale };
+  });
+
+  await box.dispatchEvent('pointerdown', {
+    pointerId: 4, pointerType: 'touch', clientX: bag.x, clientY: bag.y, isPrimary: true, button: 0,
+  });
+  await box.dispatchEvent('pointerup', {
+    pointerId: 4, pointerType: 'touch', clientX: bag.x, clientY: bag.y, isPrimary: true,
+  });
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor.name === 'PauseScene',
+    null, { timeout: 4000 },
+  );
+  const tab = await page.evaluate(() => window.fantastania.game.scenes.active.tab);
+  t.assert(tab === 'inventory', `tapping the Bag button opened the pack tab (${tab})`);
+});
+
 scenario('sprite-sheet', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
   const result = await page.evaluate(async () => {
