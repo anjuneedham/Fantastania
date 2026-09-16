@@ -414,6 +414,124 @@ scenario('boss', 'desktop', async (page, t) => {
   t.assert(phased, 'the boss survives a phase transition');
 });
 
+scenario('loot-inventory', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const start = await page.evaluate(() => ({
+    items: window.fantastania.state.inventory.length,
+    weapon: window.fantastania.state.equipment.weapon,
+  }));
+  t.assert(start.items > 0, `a new game starts with supplies (${start.items} stacks)`);
+  t.assert(!!start.weapon, `a new game starts equipped (${start.weapon})`);
+
+  // Opening the Homestead's supply chest must drop collectable pickups.
+  const chest = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('homestead', 'default', false);
+    const c = s.area.interactables[0];
+    s.player.x = c.x;
+    s.player.y = c.y + 30;
+    const before = s.world.entities.length;
+    c.interact(s.world, s.player);
+    await new Promise((r) => setTimeout(r, 60));
+    return { opened: c.opened, spawned: s.world.entities.length - before + 1 };
+  });
+  t.assert(chest.opened, 'the chest opened');
+
+  // Walk over the drops and confirm they land in the pack.
+  await page.waitForTimeout(2200);
+  const after = await page.evaluate(() => ({
+    gold: window.fantastania.state.gold,
+    bread: window.fantastania.state.inventory
+      .filter((s) => s.itemId === 'breadRation')
+      .reduce((n, s) => n + s.count, 0),
+  }));
+  t.assert(after.gold > 25, `chest gold was collected (${after.gold}g)`);
+  t.assert(after.bread >= 4, `chest items were collected (${after.bread} bread)`);
+
+  const reopened = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    return s.area.interactables[0].interact(s.world, s.player);
+  });
+  t.assert(!reopened, 'an opened chest cannot be looted twice');
+});
+
+scenario('equipment-stats', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const result = await page.evaluate(() => {
+    const { inventory, state } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    const before = { str: s.player.stats.total.strength, power: s.player.physicalPower };
+
+    inventory.addItem('woodcuttersAxe', 1, false);
+    const equip = inventory.equipItem('woodcuttersAxe', s.player);
+    const after = { str: s.player.stats.total.strength, power: s.player.physicalPower };
+
+    // The displaced weapon must come back to the pack, not vanish.
+    const returned = state.inventory.some((x) => x.itemId === 'wornBlade');
+    return { equip, before, after, returned, weapon: state.equipment.weapon };
+  });
+  t.assert(result.equip.ok, 'equipping succeeded');
+  t.assert(result.weapon === 'woodcuttersAxe', 'the weapon slot updated');
+  t.assert(result.after.str > result.before.str,
+    `equipment raised strength (${result.before.str} to ${result.after.str})`);
+  t.assert(result.after.power > result.before.power, 'derived power followed the stat change');
+  t.assert(result.returned, 'the replaced weapon went back to the pack');
+
+  const gated = await page.evaluate(() => {
+    const { inventory } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    inventory.addItem('aetherlightBlade', 1, false);
+    return inventory.equipItem('aetherlightBlade', s.player);
+  });
+  t.assert(!gated.ok, `level requirements are enforced (${gated.reason})`);
+});
+
+scenario('consumables-and-skills', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const potion = await page.evaluate(() => {
+    const { inventory, state } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    s.player.health = 10;
+    const before = s.player.health;
+    const count = state.inventory.find((x) => x.itemId === 'potionMinorHealth')?.count ?? 0;
+    const res = inventory.useItem('potionMinorHealth', s.player);
+    const left = state.inventory.find((x) => x.itemId === 'potionMinorHealth')?.count ?? 0;
+    return { res, before, after: s.player.health, count, left };
+  });
+  t.assert(potion.res.ok, 'the potion was used');
+  t.assert(potion.after > potion.before, `it healed (${potion.before} to ${Math.round(potion.after)})`);
+  t.assert(potion.left === potion.count - 1, 'it was consumed from the stack');
+
+  const skill = await page.evaluate(() => {
+    const { skills, state } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    state.skillPoints = 3;
+    const before = s.player.stats.total.vitality;
+    const first = skills.spendPoint('eric_toughness', s.player);
+    const after = s.player.stats.total.vitality;
+    // A node behind an unmet prerequisite must be refused.
+    const locked = skills.spendPoint('eric_bastion', s.player);
+    return { first, locked, before, after, points: state.skillPoints };
+  });
+  t.assert(skill.first.ok, 'a skill point was spent');
+  t.assert(skill.after > skill.before,
+    `the skill raised vitality (${skill.before} to ${skill.after})`);
+  t.assert(skill.points === 2, 'the point was deducted');
+  t.assert(!skill.locked.ok, `prerequisites are enforced (${skill.locked.reason})`);
+
+  const unlock = await page.evaluate(() => {
+    const { skills, state } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    state.level = 10;
+    state.skillPoints = 10;
+    skills.spendPoint('eric_spark', s.player);
+    const res = skills.spendPoint('eric_firebolt', s.player);
+    return { res, unlocked: state.unlockedAbilities.includes('fireBolt') };
+  });
+  t.assert(unlock.res.ok, 'an ability node was purchased');
+  t.assert(unlock.unlocked, 'the skill tree unlocked Fire Bolt');
+});
+
 scenario('resize', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
   await page.setViewportSize({ width: 700, height: 900 });

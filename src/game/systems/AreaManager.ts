@@ -6,7 +6,9 @@ import type {
 } from '../areaTypes';
 import { getArea } from '../../data/areas';
 import { tryGetItem } from '../../data/items';
+import { Chest } from '../entities/Chest';
 import { Enemy } from '../entities/Enemy';
+import type { Interactable } from '../entities/Interactable';
 import { Portal } from '../entities/Portal';
 import { state } from '../GameState';
 import type { PropInstance, World } from '../World';
@@ -24,6 +26,8 @@ export interface LoadedArea {
   def: AreaDef;
   portals: Portal[];
   enemies: Enemy[];
+  /** Everything the player can walk up to and use. */
+  interactables: Interactable[];
   /** The boss, once the encounter has started. */
   boss: Enemy | null;
   /** Landmarks not yet announced this session. */
@@ -52,6 +56,13 @@ export function loadArea(world: World, areaId: string): LoadedArea {
 
   const enemies = spawnEnemies(world, def);
 
+  const interactables: Interactable[] = [];
+  for (const placement of def.chests ?? []) {
+    const chest = new Chest(placement);
+    world.addNow(chest);
+    interactables.push(chest);
+  }
+
   // Props are static: sort once here so the renderer can merge instead of sort.
   world.props.sort((a, b) => a.y - b.y);
   world.glowProps = world.props.filter((p) => p.glow);
@@ -62,6 +73,7 @@ export function loadArea(world: World, areaId: string): LoadedArea {
     def,
     portals,
     enemies,
+    interactables,
     boss: null,
     landmarks: (def.landmarks ?? []).filter((l) => !state.discoveredLocations.includes(l.id)),
     secrets: (def.secrets ?? []).filter((s) => !state.foundSecrets.includes(s.id)),

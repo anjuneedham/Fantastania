@@ -5,13 +5,18 @@ import { dist2 } from '../engine/math';
 import { state } from '../game/GameState';
 import { bus } from '../game/events';
 import { Enemy } from '../game/entities/Enemy';
+import type { Interactable } from '../game/entities/Interactable';
+import { Pickup } from '../game/entities/Pickup';
 import { Player } from '../game/entities/Player';
 import type { Portal } from '../game/entities/Portal';
 import {
   checkRequirement, loadArea, spawnBoss, spawnPointFor, type LoadedArea,
 } from '../game/systems/AreaManager';
 import { CombatSystem } from '../game/systems/CombatSystem';
+import { rollLoot } from '../game/systems/InventorySystem';
 import { RewardSystem } from '../game/systems/RewardSystem';
+import { getEnemy } from '../data/enemies';
+import { Rng } from '../engine/Rng';
 import { World } from '../game/World';
 import { WorldRenderer } from '../game/WorldRenderer';
 import { renderPad } from '../ui/padRenderer';
@@ -55,6 +60,7 @@ export class WorldScene extends Scene {
     this.combat = new CombatSystem(this.world, this.player);
     toasts.attach();
     this.rewards.attach();
+    this.rewards.onLoot = (enemyId, level, x, y) => this.dropLoot(enemyId, level, x, y);
     this.unsubscribes.push(
       bus.on('enemyKilled', () => this.markSpawnCleared()),
     );
@@ -80,6 +86,56 @@ export class WorldScene extends Scene {
   }
 
   private unsubscribes: Array<() => void> = [];
+  /** The interactable the Use button is currently bound to; read by the HUD. */
+  activeInteractable: Interactable | null = null;
+
+  /**
+   * Rolls an enemy's drops and tosses them on the ground. Seeded per kill so a
+   * reload cannot be used to reroll a drop that already happened.
+   */
+  private dropLoot(enemyId: string, level: number, x: number, y: number): void {
+    const def = getEnemy(enemyId);
+    const rng = new Rng(((state.kills * 2654435761) ^ Math.round(x * 31 + y)) >>> 0);
+    const loot = rollLoot(def.lootTableId, rng);
+
+    if (loot.gold > 0) this.world.spawn(Pickup.forGold(loot.gold, x, y));
+    for (const item of loot.items) {
+      this.world.spawn(Pickup.forItem(item.itemId, item.count, x, y));
+      bus.emit('lootDropped', { itemId: item.itemId, x, y });
+    }
+    void level;
+  }
+
+  /**
+   * Picks the single nearest usable interactable and routes the Use button to
+   * it, so the prompt is never ambiguous and touch needs only one button.
+   */
+  private updateInteractions(): void {
+    const player = this.player;
+    let best: Interactable | null = null;
+    let bestD2 = Infinity;
+
+    for (const item of this.area.interactables) {
+      item.focused = false;
+      if (!item.available) continue;
+      const r = item.interactRadius;
+      const d2 = dist2(player.x, player.y, item.x, item.y);
+      if (d2 > r * r) continue;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = item;
+      }
+    }
+
+    this.activeInteractable = best;
+    if (best) best.focused = true;
+    // The touch Use button only exists when there is something to use.
+    this.game.controls.pad.setVisible('interact', best !== null);
+
+    if (best && !player.isDead && this.game.controls.pressed('interact')) {
+      best.interact(this.world, player);
+    }
+  }
 
   /** Loads an area and places the player at one of its spawn points. */
   async enterArea(areaId: string, spawnId: string, fade = true): Promise<void> {
@@ -158,6 +214,7 @@ export class WorldScene extends Scene {
     toasts.update(dt);
 
     this.updatePortals(dt);
+    this.updateInteractions();
     this.checkDiscoveries();
     this.updateBoss();
     this.updateDeath(dt);
