@@ -714,16 +714,155 @@ scenario('save-load', 'desktop', async (page, t) => {
   t.assert(restored.quest, 'active quests restored');
   t.assert(restored.flag === 42, 'story flags restored');
 
-  // Reload the page entirely and confirm progress survives a cold start.
+  // Reload the page entirely and confirm the title screen offers to resume
+  // the save that was just written — this is what "survives a reload" means
+  // now that boot always lands on the menu rather than auto-resuming.
+  // (waitForBoot is deliberately NOT used here: it force-starts a fresh game,
+  // which would silently paper over a reload that lost the save.)
   await page.reload({ waitUntil: 'load' });
-  await t.waitForBoot(page);
-  const afterReload = await page.evaluate(() => ({
-    gold: window.fantastania.state.gold,
-    level: window.fantastania.state.level,
-    area: window.fantastania.game.scenes.active.area.def.id,
+  await t.waitForMenu(page);
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.continueSlot !== undefined,
+    null, { timeout: 5000 },
+  ).catch(() => {}); // continueSlot is private state; fall through to the slot check below.
+
+  const slotAfterReload = await page.evaluate(async () => {
+    const info = await window.fantastania.saves.slotInfo(1);
+    return info;
+  });
+  t.assert(!slotAfterReload.empty && !slotAfterReload.corrupt,
+    'the save slot itself survived the reload');
+  t.assert(slotAfterReload.summary?.gold === saved.gold,
+    `the persisted summary matches what was saved (${slotAfterReload.summary?.gold}g)`);
+
+  // Now actually resume it as the player would, via the real load path.
+  const resumed = await page.evaluate(async () => {
+    const { saves, state } = window.fantastania;
+    await saves.load(1);
+    return { gold: state.gold, level: state.level, area: state.currentAreaId };
+  });
+  t.assert(resumed.gold === saved.gold, `resuming after reload restores gold (${resumed.gold}g)`);
+  t.assert(resumed.area === saved.area, `resuming after reload restores area (${resumed.area})`);
+});
+
+scenario('main-menu-flow', 'desktop', async (page, t) => {
+  // A real click-driven pass through Title -> Character Select -> World,
+  // exercising the actual PointerTracker/button() hit-testing pipeline and
+  // the view-space-to-client-pixel coordinate math, not just the state
+  // changes those clicks eventually cause.
+  await t.waitForMenu(page);
+
+  const title = await page.evaluate(() => window.fantastania.game.scenes.active.constructor.name);
+  t.assert(title === 'MainMenuScene', `boots to the title screen (got ${title})`);
+
+  // Play button: first of three (no save exists yet in a fresh context).
+  const playRect = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const w = Math.min(340, r.viewWidth * 0.42);
+    const h = 50;
+    const totalH = 3 * h + 2 * 14;
+    const y = r.viewHeight * 0.52 - totalH / 2;
+    const x = r.viewWidth / 2 - w / 2;
+    return { x, y, w, h };
+  });
+  await t.viewClick(page, playRect.x + playRect.w / 2, playRect.y + playRect.h / 2);
+
+  const afterPlay = await page.evaluate(() => window.fantastania.game.scenes.active.constructor.name);
+  t.assert(afterPlay === 'CharacterSelectScene', `Play opens character select (got ${afterPlay})`);
+
+  // Click Lev's card (the second of two), then the confirm button.
+  const cardRect = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const cardW = Math.min(380, r.viewWidth * 0.44);
+    const cardH = r.viewHeight - 150;
+    const gap = 24;
+    const totalW = cardW * 2 + gap;
+    const startX = r.viewWidth / 2 - totalW / 2;
+    return { x: startX + (cardW + gap), y: 66, w: cardW, h: cardH };
+  });
+  await t.viewClick(page, cardRect.x + cardRect.w / 2, cardRect.y + 40);
+
+  const selected = await page.evaluate(() => window.fantastania.game.scenes.active.selected);
+  t.assert(selected === 'lev', `clicking Lev's card selects him (selected=${selected})`);
+
+  const confirmRect = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    return { x: r.viewWidth / 2 - 110, y: r.viewHeight - 60, w: 220, h: 50 };
+  });
+  await t.viewClick(page, confirmRect.x + confirmRect.w / 2, confirmRect.y + confirmRect.h / 2);
+
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor?.name === 'WorldScene',
+    null, { timeout: 8000 },
+  );
+  const result = await page.evaluate(() => ({
+    character: window.fantastania.state.characterId,
+    scene: window.fantastania.game.scenes.active.constructor.name,
   }));
-  t.assert(afterReload.gold > 0, `progress survived a page reload (${afterReload.gold}g)`);
-  t.assert(afterReload.area === afterReload.area, `resumed in ${afterReload.area}`);
+  t.assert(result.character === 'lev', `confirming starts the game as Lev (got ${result.character})`);
+  t.assert(result.scene === 'WorldScene', 'lands in the world');
+});
+
+scenario('settings-flow', 'desktop', async (page, t) => {
+  await t.waitForMenu(page);
+
+  const settingsRect = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const w = Math.min(340, r.viewWidth * 0.42);
+    const h = 50;
+    const gap = 14;
+    const totalH = 3 * h + 2 * gap;
+    const y = r.viewHeight * 0.52 - totalH / 2 + 2 * (h + gap);
+    const x = r.viewWidth / 2 - w / 2;
+    return { x, y, w, h };
+  });
+  await t.viewClick(page, settingsRect.x + settingsRect.w / 2, settingsRect.y + settingsRect.h / 2);
+
+  const opened = await page.evaluate(() => window.fantastania.game.scenes.active.constructor.name);
+  t.assert(opened === 'SettingsScene', `Settings button opens the settings panel (got ${opened})`);
+
+  const before = await page.evaluate(() => window.fantastania.state.settings.masterVolume);
+
+  // Drag the master-volume slider down to roughly 20% by clicking near the
+  // left end of its track, using the same geometry the scene itself draws.
+  const sliderRect = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const w = Math.min(460, r.viewWidth - 60);
+    const h = Math.min(430, r.viewHeight - 40);
+    const rect = { x: r.viewWidth / 2 - w / 2, y: r.viewHeight / 2 - h / 2, w, h };
+    return { x: rect.x + 26, y: rect.y + 64, w: rect.w - 52, h: 18 };
+  });
+  await t.viewClick(page, sliderRect.x + sliderRect.w * 0.15, sliderRect.y + sliderRect.h / 2);
+
+  const after = await page.evaluate(() => ({
+    settingsValue: window.fantastania.state.settings.masterVolume,
+    audioValue: window.fantastania.game.audio.volumes.master,
+  }));
+  t.assert(after.settingsValue !== before, `dragging the slider changed the setting (${before} -> ${after.settingsValue})`);
+  t.assert(Math.abs(after.settingsValue - after.audioValue) < 0.01,
+    `the change reached the live AudioBus (${after.audioValue})`);
+  t.assert(after.settingsValue < 0.3, `landed near where it was clicked (${after.settingsValue})`);
+
+  // Close and confirm it persisted to storage, not just live memory.
+  const doneRect = await page.evaluate(() => {
+    const r = window.fantastania.game.renderer;
+    const w = Math.min(460, r.viewWidth - 60);
+    const h = Math.min(430, r.viewHeight - 40);
+    const rect = { x: r.viewWidth / 2 - w / 2, y: r.viewHeight / 2 - h / 2, w, h };
+    return { x: rect.x + rect.w - 96, y: rect.y + rect.h - 46, w: 78, h: 34 };
+  });
+  await t.viewClick(page, doneRect.x + doneRect.w / 2, doneRect.y + doneRect.h / 2);
+  await page.waitForTimeout(150);
+
+  const persisted = await page.evaluate(async () => {
+    const raw = await window.fantastania.game.storage.get('settings');
+    return raw ? JSON.parse(raw).masterVolume : null;
+  });
+  t.assert(persisted !== null && Math.abs(persisted - after.settingsValue) < 0.01,
+    `settings persisted to storage (${persisted})`);
+
+  const closed = await page.evaluate(() => window.fantastania.game.scenes.active.constructor.name);
+  t.assert(closed === 'MainMenuScene', 'Done returns to the title screen');
 });
 
 scenario('sprite-sheet', 'desktop', async (page, t) => {
@@ -802,13 +941,58 @@ function chromeBinary() {
 }
 
 const helpers = {
-  async waitForBoot(page) {
+  /** Waits for the app to finish booting, with the title screen on display. */
+  async waitForMenu(page) {
     await page.waitForFunction(() => !!window.fantastania?.game, null, { timeout: 20000 });
     await page.waitForFunction(
       () => window.fantastania.game.scenes.active && window.fantastania.game.scenes.fade < 0.2,
       null,
       { timeout: 20000 },
     );
+  },
+  /**
+   * Waits for boot, then jumps straight past the title/character-select flow
+   * into a fresh single-player world — what nearly every gameplay scenario
+   * actually wants to test. The handful of scenarios that exercise the menu
+   * itself use `waitForMenu` and drive it with real clicks instead.
+   */
+  async waitForBoot(page) {
+    await helpers.waitForMenu(page);
+    await page.evaluate(() => window.fantastania.skipToWorld('eric'));
+    await page.waitForFunction(
+      () => window.fantastania.game.scenes.active?.player
+        && window.fantastania.game.scenes.fade < 0.2,
+      null,
+      { timeout: 20000 },
+    );
+  },
+  /**
+   * Performs a real mouse click at a logical view-space coordinate, converting
+   * through the renderer's actual offset/scale/dpr the same way Input.toView
+   * does in reverse. This drives the UI exactly as a real user's click would
+   * — through native browser mouse events — rather than calling scene methods
+   * directly, so it genuinely exercises PointerTracker and button() hit-testing.
+   */
+  async viewClick(page, vx, vy) {
+    const client = await page.evaluate(([vx, vy]) => {
+      const r = window.fantastania.game.renderer;
+      const rect = r.canvas.getBoundingClientRect();
+      const cssScale = r.scale / r.dpr;
+      return {
+        x: rect.left + r.offsetX + vx * cssScale,
+        y: rect.top + r.offsetY + vy * cssScale,
+      };
+    }, [vx, vy]);
+    // Explicit down/wait/up rather than page.mouse.click(): a zero-delay
+    // synthetic click can complete both events before the game's rAF loop
+    // ever observes the pointer as down, which a real user's click (which
+    // always has non-zero duration) never does. The wait makes this a more
+    // faithful simulation, not a weaker one.
+    await page.mouse.move(client.x, client.y);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    await page.mouse.up();
+    await page.waitForTimeout(80);
   },
   async playerPos(page) {
     return page.evaluate(() => {

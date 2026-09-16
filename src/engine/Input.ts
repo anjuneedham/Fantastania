@@ -27,6 +27,14 @@ export class Input {
 
   /** Pointers that went down this frame and have not yet been claimed. */
   private readonly downQueue: number[] = [];
+  /**
+   * Pointer ids that went up this tick, for any pointer type. Populated once
+   * at the real native event and cleared once per tick in `endFrame`, the
+   * same latching pattern as `pressed`/`released` — safe to read from
+   * multiple `update()` calls within one tick (the fixed-timestep loop can
+   * run more than one per rendered frame) without losing the signal.
+   */
+  private readonly justUpIds = new Set<number>();
   private readonly scratch = { x: 0, y: 0 };
   private detach: Array<() => void> = [];
 
@@ -37,6 +45,8 @@ export class Input {
   mouseY = 0;
   mouseDown = false;
   mouseJustDown = false;
+  /** True for the whole tick a mouse button was released in; see `endFrame`. */
+  mouseJustUp = false;
   wheelDelta = 0;
   /** True once the mouse has actually moved; before that its position is a lie. */
   mouseEverMoved = false;
@@ -118,7 +128,11 @@ export class Input {
       } catch {
         /* never captured */
       }
-      if (e.pointerType === 'mouse') this.mouseDown = false;
+      if (e.pointerType === 'mouse') {
+        this.mouseDown = false;
+        this.mouseJustUp = true;
+      }
+      this.justUpIds.add(e.pointerId);
     };
     const onWheel = (e: WheelEvent) => {
       this.wheelDelta += e.deltaY;
@@ -192,11 +206,18 @@ export class Input {
     return this.pointers.get(id);
   }
 
+  /** True if this pointer id (any type) went up during the current tick. */
+  wasJustReleased(id: number): boolean {
+    return this.justUpIds.has(id);
+  }
+
   /** Clears per-frame edge state. Call at the very end of a frame. */
   endFrame(): void {
     this.pressed.clear();
     this.released.clear();
     this.downQueue.length = 0;
+    this.mouseJustUp = false;
+    this.justUpIds.clear();
     this.mouseJustDown = false;
     this.wheelDelta = 0;
     for (const p of this.pointers.values()) p.justDown = false;

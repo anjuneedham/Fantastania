@@ -14,6 +14,7 @@ import { bootComplete, bootError, bootProgress } from './platform/boot';
 import {
   hideNativeChrome, installBackHandler, lockLandscape, onAppStateChange, watchOrientation,
 } from './platform/device';
+import { MainMenuScene } from './scenes/MainMenuScene';
 import { WorldScene } from './scenes/WorldScene';
 
 /**
@@ -57,21 +58,23 @@ async function main(): Promise<void> {
   });
 
   bootProgress(0.9, 'Entering the Realm…');
-  // Resume the most recent save when there is one; otherwise begin a new story.
-  // The menu and character-select screens replace this in the next phase.
-  const recent = await saves.mostRecentSlot();
-  if (!recent || !(await saves.load(recent.slot))) {
-    startNewGame('eric');
-  }
-  game.scenes.replace(new WorldScene());
+  game.scenes.replace(new MainMenuScene());
   game.start();
 
   await bootComplete();
 
-  // Exposed for debugging in the browser console; harmless in production.
+  // Exposed for debugging in the browser console and for the headless
+  // verification harness; harmless in production, and `skipToWorld` is the
+  // only piece written specifically for tests (a menu-free fast path into a
+  // fresh game), documented here rather than hidden in the test file.
   (window as unknown as { fantastania?: unknown }).fantastania = {
     game, state, areas: AREAS, abilities: ABILITIES,
     inventory, skills, saves, quests, dialogue, bus,
+    skipToWorld: (characterId: string) => {
+      startNewGame(characterId);
+      game.controls.gameplayEnabled = true;
+      game.scenes.replace(new WorldScene());
+    },
   };
 }
 
