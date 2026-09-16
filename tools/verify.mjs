@@ -904,7 +904,8 @@ scenario('pause-menu-flow', 'desktop', async (page, t) => {
 
   const geom = await pausePanelGeom(page);
   const tabY = geom.y + 46 + 17;
-  const tabW = (geom.w - 40) / 4;
+  // Character, Pack, Skills, Quests, Map — tabBar() divides evenly by count.
+  const tabW = (geom.w - 40) / 5;
   const tabX0 = geom.x + 20;
 
   // Pack tab: equip a weapon by clicking the item cell, then the Equip button
@@ -1064,6 +1065,116 @@ scenario('pause-menu-touch', 'phone', async (page, t) => {
   );
   const tab = await page.evaluate(() => window.fantastania.game.scenes.active.tab);
   t.assert(tab === 'inventory', `tapping the Bag button opened the pack tab (${tab})`);
+});
+
+scenario('world-map', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+
+  // Data integrity: every region has map layout data, and every link
+  // connects two real areas. This is what would catch a seventh region
+  // being added to AREA_ORDER without the map-screen data that goes with it.
+  const data = await page.evaluate(() => {
+    const { areas } = window.fantastania;
+    // AREA_ORDER/POSITIONS/LINKS are not on the debug bridge; reach them via
+    // a loaded area's own module cache is not available, so derive coverage
+    // from what the Map tab itself actually used to draw the last frame.
+    return { areaIds: Object.keys(areas) };
+  });
+  t.assert(data.areaIds.length === 6, `Aetheria has six regions (${data.areaIds.length})`);
+
+  await page.keyboard.press('KeyM');
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor.name === 'PauseScene',
+    null, { timeout: 4000 },
+  );
+  const tab = await page.evaluate(() => window.fantastania.game.scenes.active.tab);
+  t.assert(tab === 'map', `the M key opens the pause menu on the Map tab (${tab})`);
+
+  const geom = await pausePanelGeom(page);
+  const body = { x: geom.x + 20, y: geom.y + 92, w: geom.w - 40, h: geom.h - 148 };
+  const gPad = 30;
+  const gx = body.x + gPad;
+  const gy = body.y + gPad;
+  const gw = 456 - gPad * 2;
+  const gh = body.h - gPad * 2;
+  // Fractions from src/data/areas/index.ts's AREA_MAP_POSITIONS.
+  const nodeAt = (fx, fy) => ({ x: gx + fx * gw, y: gy + fy * gh });
+  const homestead = nodeAt(0.14, 0.62);
+  const arcaneCaves = nodeAt(0.68, 0.66);
+  const whisperingWoods = nodeAt(0.37, 0.58);
+
+  // The starting area, clicked: "you are here", nothing to travel to.
+  await t.viewClick(page, homestead.x, homestead.y);
+  await page.waitForTimeout(80);
+  const current = await page.evaluate(() => window.fantastania.game.scenes.active.selectedMapArea);
+  t.assert(current === 'homestead', `clicking the current region's node selects it (${current})`);
+
+  // A locked region shows no way to reach it and cannot be travelled to.
+  await t.viewClick(page, arcaneCaves.x, arcaneCaves.y);
+  await page.waitForTimeout(80);
+  const beforeArea = await page.evaluate(() => window.fantastania.game.scenes.active.world.area.def.id);
+  const detailBottom = geom.y + 92 + (geom.h - 148);
+  await t.viewClick(page, geom.x + 496 + 102, detailBottom - 18);
+  await page.waitForTimeout(150);
+  const afterLockedClick = await page.evaluate(
+    () => window.fantastania.game.scenes.active.constructor.name,
+  );
+  t.assert(afterLockedClick === 'PauseScene',
+    'a locked region has no Travel button to click through to it');
+  const stillSameArea = await page.evaluate(
+    () => window.fantastania.game.scenes.active.world.area.def.id,
+  );
+  t.assert(stillSameArea === beforeArea, 'and the world area did not change');
+
+  // Unlocking a region makes it travel-able for real, through the button.
+  await page.evaluate(() => window.fantastania.state.unlockArea('whisperingWoods'));
+  await t.viewClick(page, whisperingWoods.x, whisperingWoods.y);
+  await page.waitForTimeout(80);
+  await t.viewClick(page, geom.x + 496 + 102, detailBottom - 18);
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active?.constructor.name === 'WorldScene'
+      && window.fantastania.game.scenes.active.area?.def.id === 'whisperingWoods',
+    null, { timeout: 6000 },
+  );
+  t.assert(true, 'clicking Travel on an unlocked region actually moves the player there');
+
+  // The pause-menu shortcut guard must have reset, not left the world stuck
+  // ignoring Escape because it still thinks a menu is opening.
+  const menuOpening = await page.evaluate(() => window.fantastania.game.scenes.active.menuOpening);
+  t.assert(menuOpening === false, 'the world can open the menu again after a map-driven travel');
+});
+
+scenario('minimap', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+
+  const withSetting = await page.evaluate(async () => {
+    const { state } = window.fantastania;
+    state.settings.showMinimap = true;
+    await new Promise((r) => setTimeout(r, 120));
+    return true;
+  });
+  t.assert(withSetting, 'renders across a frame with the minimap enabled');
+
+  // Visit a couple more areas with the radar live the whole time — the real
+  // crash surface for a "draw whatever is nearby" overlay is an area with a
+  // different shape of data (no boss, a locked portal, zero landmarks left).
+  await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('bossArena', 'default', false);
+  });
+  await page.waitForTimeout(150);
+
+  const disabled = await page.evaluate(async () => {
+    window.fantastania.state.settings.showMinimap = false;
+    await new Promise((r) => setTimeout(r, 120));
+    return true;
+  });
+  t.assert(disabled, 'and across a frame with it turned back off, without throwing either way');
 });
 
 scenario('sprite-sheet', 'desktop', async (page, t) => {

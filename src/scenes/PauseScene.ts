@@ -1,5 +1,7 @@
+import { AREA_LINKS, AREA_MAP_POSITIONS, AREA_ORDER, AREAS } from '../data/areas';
 import { getQuest } from '../data/quests';
 import { tryGetItem } from '../data/items';
+import { BIOMES } from '../art/environment';
 import { C, alpha, bodyFont, displayFont, RARITY_COLORS } from '../art/palette';
 import { createPose, drawActor } from '../art/sprites';
 import { clamp, TAU } from '../engine/math';
@@ -23,10 +25,10 @@ import { MainMenuScene } from './MainMenuScene';
 import { SettingsScene } from './SettingsScene';
 import type { WorldScene } from './WorldScene';
 
-export type PauseTab = 'character' | 'inventory' | 'skills' | 'quests';
+export type PauseTab = 'character' | 'inventory' | 'skills' | 'quests' | 'map';
 
-const TABS: readonly PauseTab[] = ['character', 'inventory', 'skills', 'quests'];
-const TAB_LABELS = ['Character', 'Pack', 'Skills', 'Quests'];
+const TABS: readonly PauseTab[] = ['character', 'inventory', 'skills', 'quests', 'map'];
+const TAB_LABELS = ['Character', 'Pack', 'Skills', 'Quests', 'Map'];
 const STAT_ORDER: readonly StatKey[] = ['strength', 'defense', 'magic', 'agility', 'vitality', 'spirit'];
 const SLOT_LABELS: Record<EquipSlot, string> = {
   weapon: 'Weapon', armor: 'Armor', accessory: 'Accessory',
@@ -50,6 +52,7 @@ export class PauseScene extends Scene {
 
   private selectedItemId: string | null = null;
   private selectedSkill: string | null = null;
+  private selectedMapArea: string | null = null;
   private pendingQuit = false;
   private pendingRespec = false;
   private pendingAbandon: string | null = null;
@@ -145,6 +148,7 @@ export class PauseScene extends Scene {
       case 'inventory': this.renderInventory(ctx, body); break;
       case 'skills': this.renderSkills(ctx, body); break;
       case 'quests': this.renderQuests(ctx, body); break;
+      case 'map': this.renderMap(ctx, body); break;
     }
     ctx.restore();
 
@@ -699,5 +703,164 @@ export class PauseScene extends Scene {
         }
       }
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Map                                                                */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * `AREA_MAP_POSITIONS` and `AREA_LINKS` (src/data/areas/index.ts) are
+   * schematic layout data authored for exactly this screen — "kept here
+   * rather than in each area file because they describe the map, not the
+   * place" — and had no reader anywhere in the game until this method.
+   */
+  private renderMap(ctx: CanvasRenderingContext2D, rect: Rect): void {
+    const graphRect: Rect = { x: rect.x, y: rect.y, w: 456, h: rect.h };
+    const pad = 30;
+    const gx = graphRect.x + pad;
+    const gy = graphRect.y + pad;
+    const gw = graphRect.w - pad * 2;
+    const gh = graphRect.h - pad * 2;
+    const nodePos = (id: string) => {
+      const f = AREA_MAP_POSITIONS[id];
+      return { x: gx + f.x * gw, y: gy + f.y * gh };
+    };
+
+    for (const [a, b] of AREA_LINKS) {
+      const pa = nodePos(a);
+      const pb = nodePos(b);
+      const bothUnlocked = state.isAreaUnlocked(a) && state.isAreaUnlocked(b);
+      ctx.strokeStyle = bothUnlocked ? alpha(C.aether, 0.45) : alpha(C.mist, 0.35);
+      ctx.lineWidth = bothUnlocked ? 2 : 1.5;
+      ctx.setLineDash(bothUnlocked ? [] : [4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    for (const id of AREA_ORDER) {
+      const def = AREAS[id];
+      const p = nodePos(id);
+      const unlocked = state.isAreaUnlocked(id);
+      const current = this.world.area.def.id === id;
+      const accent = BIOMES[def.biome].accent;
+      const nr = current ? 14 : 11;
+
+      if (current) {
+        ctx.strokeStyle = alpha(C.aetherSoft, 0.5 + Math.sin(this.pose.animTime * 3) * 0.2);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, nr + 6, 0, TAU);
+        ctx.stroke();
+      }
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, nr, 0, TAU);
+      ctx.fillStyle = unlocked ? alpha(accent, 0.85) : alpha(C.stoneDark, 0.8);
+      ctx.fill();
+      ctx.strokeStyle = this.selectedMapArea === id ? C.white : alpha(C.void, 0.6);
+      ctx.lineWidth = this.selectedMapArea === id ? 2 : 1.5;
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      if (!unlocked) {
+        ctx.font = displayFont(11);
+        ctx.fillStyle = alpha(C.boneDim, 0.8);
+        ctx.fillText('🔒', p.x, p.y + 1);
+      } else if (def.boss && state.hasFlag(def.boss.defeatFlag)) {
+        ctx.font = displayFont(11);
+        ctx.fillStyle = C.gold;
+        ctx.fillText('★', p.x, p.y + 1);
+      }
+
+      ctx.font = bodyFont(10, unlocked ? 700 : 500);
+      ctx.fillStyle = unlocked ? C.bone : alpha(C.boneDim, 0.55);
+      ctx.textBaseline = 'top';
+      ctx.fillText(def.name, p.x, p.y + nr + 6);
+
+      const hit: Rect = { x: p.x - nr - 6, y: p.y - nr - 6, w: (nr + 6) * 2, h: (nr + 6) * 2 };
+      if (this.pointer.clicked(hit)) this.selectedMapArea = id;
+    }
+
+    const detailRect: Rect = { x: rect.x + 476, y: rect.y, w: rect.w - 476, h: rect.h };
+    this.renderMapDetail(ctx, detailRect);
+  }
+
+  private renderMapDetail(ctx: CanvasRenderingContext2D, rect: Rect): void {
+    const id = this.selectedMapArea ?? this.world.area.def.id;
+    const def = AREAS[id];
+    const unlocked = state.isAreaUnlocked(id);
+    const current = this.world.area.def.id === id;
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = displayFont(15);
+    ctx.fillStyle = unlocked ? BIOMES[def.biome].accent : alpha(C.boneDim, 0.6);
+    ctx.fillText(def.name, rect.x, rect.y + 16);
+
+    ctx.font = bodyFont(10, 600);
+    ctx.fillStyle = alpha(C.boneDim, 0.85);
+    ctx.fillText(
+      def.safe ? 'Safe haven' : `Recommended level ${def.recommendedLevel}`, rect.x, rect.y + 32,
+    );
+
+    ctx.font = bodyFont(11, 500);
+    ctx.fillStyle = alpha(C.bone, unlocked ? 0.9 : 0.5);
+    let ly = rect.y + 52;
+    const text = unlocked ? def.subtitle : 'This place has not been found yet.';
+    for (const line of wrapText(ctx, text, rect.w).slice(0, 3)) {
+      ctx.fillText(line, rect.x, ly);
+      ly += 15;
+    }
+
+    if (unlocked) {
+      ly += 8;
+      const landmarks = def.landmarks ?? [];
+      const secrets = def.secrets ?? [];
+      ctx.font = bodyFont(10, 600);
+      if (landmarks.length > 0) {
+        const found = landmarks.filter((l) => state.discoveredLocations.includes(l.id)).length;
+        ctx.fillStyle = C.aetherSoft;
+        ctx.fillText(`Landmarks: ${found} / ${landmarks.length}`, rect.x, ly);
+        ly += 16;
+      }
+      if (secrets.length > 0) {
+        const found = secrets.filter((s) => state.foundSecrets.includes(s.id)).length;
+        ctx.fillStyle = C.aetherSoft;
+        ctx.fillText(`Secrets: ${found} / ${secrets.length}`, rect.x, ly);
+        ly += 16;
+      }
+      if (def.boss) {
+        const defeated = state.hasFlag(def.boss.defeatFlag);
+        ctx.fillStyle = defeated ? C.gold : C.blood;
+        ctx.fillText(defeated ? 'Boss defeated' : 'Boss undefeated', rect.x, ly);
+        ly += 16;
+      }
+    }
+
+    if (unlocked && !current) {
+      const travelRect: Rect = { x: rect.x, y: rect.y + rect.h - 36, w: rect.w, h: 30 };
+      if (button(ctx, this.pointer, travelRect, `Travel to ${def.name}`,
+        { variant: 'primary', fontSize: 11 })) {
+        void this.travelTo(id);
+      }
+    } else if (current) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = bodyFont(10, 700);
+      ctx.fillStyle = C.aether;
+      ctx.fillText('You are here', rect.x + rect.w / 2, rect.y + rect.h - 16);
+    }
+  }
+
+  /** Fast travel: close the menu first so the screen the player sees fade
+   * through is the world, not the pause panel fading along with it. */
+  private async travelTo(areaId: string): Promise<void> {
+    this.close();
+    await this.world.enterArea(areaId, 'default');
   }
 }

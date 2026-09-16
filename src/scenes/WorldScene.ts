@@ -29,6 +29,7 @@ import { WorldRenderer } from '../game/WorldRenderer';
 import { renderPad } from '../ui/padRenderer';
 import { toasts } from '../ui/toasts';
 import { renderHud, updateActionPad } from '../ui/hud';
+import { renderMinimap } from '../ui/minimap';
 import { PauseScene, type PauseTab } from './PauseScene';
 
 /**
@@ -292,6 +293,7 @@ export class WorldScene extends Scene {
     else if (controls.pressed('skills')) this.openMenu('skills');
     else if (controls.pressed('quests')) this.openMenu('quests');
     else if (controls.pressed('character')) this.openMenu('character');
+    else if (controls.pressed('map')) this.openMenu('map');
   }
 
   override update(dt: number): void {
@@ -540,7 +542,10 @@ export class WorldScene extends Scene {
     ctx.restore();
 
     this.renderer.renderLighting(ctx, r);
-    if (!this.inDialogue && this.game.scenes.active === this) renderHud(ctx, r, this.player);
+    if (!this.inDialogue && this.game.scenes.active === this) {
+      renderHud(ctx, r, this.player);
+      renderMinimap(ctx, r, this.area, this.player);
+    }
     if (this.inDialogue) this.dialogueView.render(ctx, dialogue, r);
     toasts.render(ctx, r);
     this.renderDebug(ctx, r);
