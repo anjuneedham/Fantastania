@@ -5,6 +5,7 @@ import type { AudioBus } from '../engine/AudioBus';
 import type { Camera } from '../engine/Camera';
 import { circleRectOverlap, clamp, dist2 } from '../engine/math';
 import { Actor, Entity, type Faction, type WorldLike } from './entities/Entity';
+import { castAbility } from './systems/AbilitySystem';
 import { bus } from './events';
 import { state } from './GameState';
 import type { DamageEvent } from './types';
@@ -71,9 +72,16 @@ export class World implements WorldLike {
   time = 0;
   /** Set by the scene; used for area-scoped logic and audio positioning. */
   areaId = 'homestead';
+  /**
+   * Seconds of remaining hit-stop. The scene scales its delta by this, which
+   * is the cheapest way to make a heavy hit feel heavy.
+   */
+  hitStop = 0;
 
   private readonly services: WorldServices;
   private pendingSpawns: Entity[] = [];
+  /** Deferred callbacks; how a cast's wind-up resolves at the right moment. */
+  private timers: Array<{ at: number; fn: () => void }> = [];
 
   constructor(services: WorldServices) {
     this.services = services;
@@ -88,7 +96,17 @@ export class World implements WorldLike {
     this.pendingSpawns.length = 0;
     this.particles.clear();
     this.texts.clear();
+    this.timers.length = 0;
     this.time = 0;
+  }
+
+  /**
+   * Runs `fn` after `delay` seconds of simulated time. Used for cast wind-ups
+   * and telegraphed enemy attacks, so an animation and its effect stay in sync
+   * without every caster hand-rolling a timer.
+   */
+  schedule(delay: number, fn: () => void): void {
+    this.timers.push({ at: this.time + Math.max(0, delay), fn });
   }
 
   spawn(entity: Entity): void {
@@ -105,6 +123,20 @@ export class World implements WorldLike {
 
   update(dt: number): void {
     this.time += dt;
+
+    if (this.timers.length > 0) {
+      // Fire due timers, keeping the rest. Callbacks may schedule more, which
+      // land in the array being rebuilt and run on a later frame as intended.
+      const due: Array<() => void> = [];
+      let write = 0;
+      for (let i = 0; i < this.timers.length; i++) {
+        const timer = this.timers[i];
+        if (timer.at <= this.time) due.push(timer.fn);
+        else this.timers[write++] = timer;
+      }
+      this.timers.length = write;
+      for (const fn of due) fn();
+    }
 
     for (let i = 0; i < this.entities.length; i++) {
       const e = this.entities[i];
@@ -309,6 +341,7 @@ export class World implements WorldLike {
 
   private killActor(target: Actor, event: DamageEvent): void {
     target.kill();
+    target.onKilled(this, event.sourceId);
     this.particles.emit('smoke', target.x, target.y - target.sprite.height * 0.5, 8,
       C.deepNight, { speed: 45, size: 7, life: 0.9 });
     this.particles.emit('shard', target.x, target.y - target.sprite.height * 0.4, 10,
@@ -319,6 +352,19 @@ export class World implements WorldLike {
     } else {
       this.sfx('enemy_die');
     }
+  }
+
+  /**
+   * Casts an ability. Lives on World so entities can trigger abilities through
+   * the WorldLike interface without importing the ability system — which also
+   * keeps the enemy AI testable against a stub world.
+   */
+  castAbility(
+    caster: Actor,
+    abilityId: string,
+    opts: { angle?: number; targetX?: number; targetY?: number; free?: boolean } = {},
+  ): boolean {
+    return castAbility(this, caster, abilityId, opts).ok;
   }
 
   /* ------------------------------------------------------------------ */
@@ -358,6 +404,11 @@ export class World implements WorldLike {
   ): void {
     if (state.settings.performanceMode) count = Math.ceil(count * 0.5);
     this.particles.emit(kind as ParticleKind, x, y, count, color, opts);
+  }
+
+  /** Requests a brief freeze on a solid connect. Longest request wins. */
+  requestHitStop(seconds: number): void {
+    this.hitStop = Math.max(this.hitStop, seconds);
   }
 
   shake(amount: number): void {

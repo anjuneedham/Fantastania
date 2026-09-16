@@ -1,6 +1,6 @@
 import type { ActorPose, ActorSprite } from '../../art/sprites';
 import { createPose, drawActor } from '../../art/sprites';
-import type { DamageEvent, StatusEffectDef, StatusKind } from '../types';
+import type { DamageEvent, StatKey, StatusEffectDef, StatusKind } from '../types';
 import { TAU, clamp, clamp01 } from '../../engine/math';
 
 export type Faction = 'player' | 'enemy' | 'neutral';
@@ -49,6 +49,21 @@ export interface WorldLike {
   readonly time: number;
   entities: Entity[];
   actors: Actor[];
+  /** Level geometry; projectiles and AI line-of-sight both consult it. */
+  obstacles: ReadonlyArray<
+    | { kind: 'rect'; x: number; y: number; w: number; h: number }
+    | { kind: 'circle'; x: number; y: number; r: number }
+  >;
+  /** True when a circle at this position would be clear of geometry. */
+  isClear(x: number, y: number, r: number): boolean;
+  /** Runs a callback after `delay` seconds of simulated time. */
+  schedule(delay: number, fn: () => void): void;
+  /** Casts a data-defined ability. Returns false when it could not be cast. */
+  castAbility(
+    caster: Actor,
+    abilityId: string,
+    opts?: { angle?: number; targetX?: number; targetY?: number; free?: boolean },
+  ): boolean;
   /** Resolves movement against level geometry, mutating the entity in place. */
   moveWithCollision(entity: Entity, dx: number, dy: number): void;
   spawn(entity: Entity): void;
@@ -100,6 +115,11 @@ export abstract class Actor extends Entity {
   pushX = 0;
   pushY = 0;
 
+  /** Ability id -> seconds remaining. */
+  cooldowns: Record<string, number> = {};
+  /** Active dash movement, driven by abilities and dodges. */
+  dash: { dirX: number; dirY: number; speed: number; timeLeft: number; duration: number } | null = null;
+
   statuses: ActiveStatus[] = [];
   /** Absorbing shield points from Arcane Shield and similar. */
   shieldPoints = 0;
@@ -132,6 +152,49 @@ export abstract class Actor extends Entity {
 
   /** Flat damage reduction applied in the damage pipeline. */
   get armor(): number {
+    return 0;
+  }
+
+  /**
+   * Attribute lookup used by ability scaling. Players read their full stat
+   * block; enemies expose a simplified one. Having both answer the same
+   * question is what lets one ability system serve both.
+   */
+  statValue(_stat: StatKey): number {
+    return 0;
+  }
+
+  get critChance(): number {
+    return 0.03;
+  }
+
+  get critDamage(): number {
+    return 1.5;
+  }
+
+  /** Hook for skill-tree modifiers; enemies return the value unchanged. */
+  modifyAbility(_abilityId: string, _field: string, value: number): number {
+    return value;
+  }
+
+  /** Starts a dash in a direction. Distance is covered over `duration`. */
+  startDash(dirX: number, dirY: number, distance: number, duration: number): void {
+    const len = Math.hypot(dirX, dirY) || 1;
+    this.dash = {
+      dirX: dirX / len,
+      dirY: dirY / len,
+      speed: distance / duration,
+      timeLeft: duration,
+      duration,
+    };
+  }
+
+  /** Fraction of damage dealt returned as health. */
+  get lifesteal(): number {
+    return 0;
+  }
+
+  get spellVamp(): number {
     return 0;
   }
 
@@ -264,6 +327,12 @@ export abstract class Actor extends Entity {
     this.clearStatuses();
   }
 
+  /**
+   * Called once by the damage pipeline after death is confirmed. Subclasses use
+   * it to award XP, drop loot or split — World stays ignorant of any of that.
+   */
+  onKilled(_world: WorldLike, _killerId: number): void {}
+
   /** Shared per-frame housekeeping. Subclasses call this from `update`. */
   protected tickCommon(dt: number, world: WorldLike): void {
     this.pose.animTime += dt;
@@ -282,6 +351,22 @@ export abstract class Actor extends Entity {
     }
 
     this.updateStatuses(dt, world);
+
+    for (const key of Object.keys(this.cooldowns)) {
+      const left = this.cooldowns[key] - dt;
+      if (left <= 0) delete this.cooldowns[key];
+      else this.cooldowns[key] = left;
+    }
+
+    if (this.dash) {
+      const d = this.dash;
+      d.timeLeft -= dt;
+      // Ease-out along the dash so it launches hard and settles.
+      const t = 1 - Math.max(0, d.timeLeft) / d.duration;
+      const speed = d.speed * (1 - t * t) * 1.5;
+      world.moveWithCollision(this, d.dirX * speed * dt, d.dirY * speed * dt);
+      if (d.timeLeft <= 0) this.dash = null;
+    }
 
     // Knockback decays fast so hits feel punchy without launching anyone into
     // next week.

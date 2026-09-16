@@ -6,6 +6,7 @@ import type {
 } from '../areaTypes';
 import { getArea } from '../../data/areas';
 import { tryGetItem } from '../../data/items';
+import { Enemy } from '../entities/Enemy';
 import { Portal } from '../entities/Portal';
 import { state } from '../GameState';
 import type { PropInstance, World } from '../World';
@@ -22,6 +23,9 @@ import type { PropInstance, World } from '../World';
 export interface LoadedArea {
   def: AreaDef;
   portals: Portal[];
+  enemies: Enemy[];
+  /** The boss, once the encounter has started. */
+  boss: Enemy | null;
   /** Landmarks not yet announced this session. */
   landmarks: LandmarkDef[];
   secrets: SecretDef[];
@@ -46,6 +50,8 @@ export function loadArea(world: World, areaId: string): LoadedArea {
     portals.push(portal);
   }
 
+  const enemies = spawnEnemies(world, def);
+
   // Props are static: sort once here so the renderer can merge instead of sort.
   world.props.sort((a, b) => a.y - b.y);
   world.glowProps = world.props.filter((p) => p.glow);
@@ -55,9 +61,87 @@ export function loadArea(world: World, areaId: string): LoadedArea {
   return {
     def,
     portals,
+    enemies,
+    boss: null,
     landmarks: (def.landmarks ?? []).filter((l) => !state.discoveredLocations.includes(l.id)),
     secrets: (def.secrets ?? []).filter((s) => !state.foundSecrets.includes(s.id)),
   };
+}
+
+/**
+ * Populates an area's hostiles.
+ *
+ * Spawn groups with `respawn: 0` (elites, one-off encounters) stay dead once
+ * cleared; everything else repopulates when the player returns, which keeps
+ * travelling through a cleared zone from feeling like a ghost town while still
+ * making a boss kill permanent.
+ */
+function spawnEnemies(world: World, def: AreaDef): Enemy[] {
+  if (def.safe || !def.enemies) return [];
+  const rng = new Rng(def.seed ^ 0x51ed);
+  const out: Enemy[] = [];
+
+  for (const spawn of def.enemies) {
+    const permanent = !spawn.respawn;
+    const key = `${def.id}:${spawn.id}`;
+    if (permanent && state.clearedSpawns.includes(key)) continue;
+
+    const count = spawn.count ?? 1;
+    const spread = spawn.spread ?? 0;
+    for (let i = 0; i < count; i++) {
+      let x = spawn.x;
+      let y = spawn.y;
+      if (spread > 0 && count > 1) {
+        // Ring placement with jitter, so a group of three does not stack up.
+        const a = (i / count) * Math.PI * 2 + rng.range(-0.4, 0.4);
+        const d = spread * rng.range(0.4, 1);
+        x += Math.cos(a) * d;
+        y += Math.sin(a) * d;
+      }
+
+      const enemy = new Enemy(spawn.enemyId, spawn.level, spawn.elite ?? false, key);
+      // Nudge out of geometry rather than spawning inside a tree.
+      const placed = findClearSpot(world, x, y, enemy.radius);
+      enemy.x = placed.x;
+      enemy.y = placed.y;
+      enemy.setHome(placed.x, placed.y, spawn.patrolRadius ?? 90);
+      enemy.pose.facing = rng.angle();
+      world.addNow(enemy);
+      out.push(enemy);
+    }
+  }
+  return out;
+}
+
+/** Spirals outward from a point until a position clear of geometry is found. */
+function findClearSpot(
+  world: World, x: number, y: number, radius: number,
+): { x: number; y: number } {
+  if (world.isClear(x, y, radius)) return { x, y };
+  for (let ring = 1; ring <= 6; ring++) {
+    const r = ring * (radius + 10);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const nx = x + Math.cos(a) * r;
+      const ny = y + Math.sin(a) * r;
+      if (world.isClear(nx, ny, radius)) return { x: nx, y: ny };
+    }
+  }
+  return { x, y };
+}
+
+/** Creates the area's boss. Called when the player trips the arena trigger. */
+export function spawnBoss(world: World, def: AreaDef): Enemy | null {
+  const boss = def.boss;
+  if (!boss) return null;
+  if (state.hasFlag(boss.defeatFlag)) return null;
+  const enemy = new Enemy(boss.enemyId, boss.level, false, `${def.id}:boss`);
+  enemy.x = boss.x;
+  enemy.y = boss.y;
+  enemy.setHome(boss.x, boss.y, 0);
+  enemy.pose.facing = Math.PI / 2;
+  world.addNow(enemy);
+  return enemy;
 }
 
 function placeProps(world: World, def: AreaDef): void {

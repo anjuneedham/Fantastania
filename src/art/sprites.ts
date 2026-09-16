@@ -113,7 +113,89 @@ function viewOf(facing: number): { flip: number; front: number } {
  * Draws an actor with its feet at (x, y). Everything is relative to
  * `sprite.height`, so the same code renders a knee-high slime and a boss.
  */
+/**
+ * Scratch buffer used to tint a single actor white when it is hit.
+ *
+ * The obvious implementation — `source-atop` a white rectangle straight onto
+ * the world canvas — composites against *everything already drawn*, so it
+ * flashes a rectangle of scenery rather than the character. Rendering the actor
+ * into its own buffer first gives `source-atop` the silhouette it needs. The
+ * buffer is allocated once and reused, and only touched while a flash is
+ * actually running.
+ */
+let flashCanvas: HTMLCanvasElement | null = null;
+let flashCtx: CanvasRenderingContext2D | null = null;
+
 export function drawActor(
+  ctx: CanvasRenderingContext2D,
+  sprite: ActorSprite,
+  pose: ActorPose,
+  x: number,
+  y: number,
+  quality: 'high' | 'low' = 'high',
+): void {
+  if (pose.hitFlash > 0.01) {
+    if (drawActorFlashed(ctx, sprite, pose, x, y, quality)) return;
+  }
+  drawActorTo(ctx, sprite, pose, x, y, quality);
+}
+
+/** Returns false if the buffered path is unavailable; caller falls back. */
+function drawActorFlashed(
+  ctx: CanvasRenderingContext2D,
+  sprite: ActorSprite,
+  pose: ActorPose,
+  x: number,
+  y: number,
+  quality: 'high' | 'low',
+): boolean {
+  const h = sprite.height;
+  // Generous bounds: auras, weapons and the death rotation all extend past the
+  // body, and clipping a flash looks worse than not flashing at all.
+  const halfW = h * 1.6;
+  const top = h * 1.9;
+  const bottom = h * 0.5;
+  const boxW = halfW * 2;
+  const boxH = top + bottom;
+
+  const m = ctx.getTransform();
+  const scale = Math.hypot(m.a, m.b) || 1;
+  const pxW = Math.ceil(boxW * scale);
+  const pxH = Math.ceil(boxH * scale);
+  // Bail out rather than allocate something enormous at extreme zoom.
+  if (pxW <= 0 || pxH <= 0 || pxW > 2048 || pxH > 2048) return false;
+
+  if (!flashCanvas) {
+    flashCanvas = document.createElement('canvas');
+    flashCtx = flashCanvas.getContext('2d');
+  }
+  const buf = flashCtx;
+  if (!buf || !flashCanvas) return false;
+
+  if (flashCanvas.width < pxW || flashCanvas.height < pxH) {
+    flashCanvas.width = Math.max(flashCanvas.width, pxW);
+    flashCanvas.height = Math.max(flashCanvas.height, pxH);
+  }
+
+  buf.setTransform(1, 0, 0, 1, 0, 0);
+  buf.clearRect(0, 0, pxW, pxH);
+  buf.setTransform(scale, 0, 0, scale, halfW * scale, top * scale);
+  drawActorTo(buf, sprite, pose, 0, 0, quality);
+
+  // Now the buffer holds only this actor, so source-atop hits exactly it.
+  buf.globalCompositeOperation = 'source-atop';
+  buf.fillStyle = alpha(C.white, clamp01(pose.hitFlash) * 0.85);
+  buf.fillRect(-halfW, -top, boxW, boxH);
+  buf.globalCompositeOperation = 'source-over';
+
+  ctx.drawImage(
+    flashCanvas, 0, 0, pxW, pxH,
+    x - halfW, y - top, boxW, boxH,
+  );
+  return true;
+}
+
+function drawActorTo(
   ctx: CanvasRenderingContext2D,
   sprite: ActorSprite,
   pose: ActorPose,
@@ -166,15 +248,6 @@ export function drawActor(
     default:
       drawHumanoid(ctx, sprite, pose);
       break;
-  }
-
-  // Damage flash is a white overlay clipped to the silhouette we just drew, so
-  // it reads on every shape without per-shape code.
-  if (pose.hitFlash > 0.01) {
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = alpha(C.white, clamp01(pose.hitFlash) * 0.8);
-    ctx.fillRect(-h, -h * 1.4, h * 2, h * 1.6);
-    ctx.globalCompositeOperation = 'source-over';
   }
 
   ctx.restore();
@@ -639,7 +712,9 @@ function drawWeapon(
 
 function drawBeast(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPose): void {
   const h = s.height;
-  const len = h * 1.5 * s.build;
+  // Body length relative to height. Longer than this and the head stops
+  // reading as a head; shorter and it stops reading as a quadruped.
+  const len = h * 1.18 * s.build;
   const { flip } = viewOf(p.facing);
   const cycle = p.animTime * (7 + p.moveSpeed01 * 8);
   const stride = Math.sin(cycle) * p.moveSpeed01;
@@ -652,17 +727,17 @@ function drawBeast(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPose):
   // Legs, front pair out of phase with the back pair.
   const legColor = darken(s.primary, 0.35);
   ctx.strokeStyle = legColor;
-  ctx.lineWidth = h * 0.10;
+  ctx.lineWidth = h * 0.085;
   ctx.lineCap = 'round';
   const legPairs: Array<[number, number]> = [
     [len * 0.30, stride],
-    [len * 0.24, -stride],
-    [-len * 0.26, -stride],
+    [len * 0.22, -stride],
+    [-len * 0.24, -stride],
     [-len * 0.32, stride],
   ];
   for (const [lx, sw] of legPairs) {
     ctx.beginPath();
-    ctx.moveTo(lx, -h * 0.42);
+    ctx.moveTo(lx, -h * 0.52);
     ctx.lineTo(lx + sw * h * 0.20, -h * 0.03);
     ctx.stroke();
   }
@@ -671,50 +746,64 @@ function drawBeast(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPose):
   ctx.strokeStyle = s.primary;
   ctx.lineWidth = h * 0.11;
   ctx.beginPath();
-  ctx.moveTo(-len * 0.42, -h * 0.60);
+  ctx.moveTo(-len * 0.40, -h * 0.70);
   ctx.quadraticCurveTo(
-    -len * 0.68, -h * 0.72 + Math.sin(p.animTime * 3.4) * h * 0.08,
-    -len * 0.74, -h * 0.44,
+    -len * 0.66, -h * 0.82 + Math.sin(p.animTime * 3.4) * h * 0.08,
+    -len * 0.72, -h * 0.5,
   );
   ctx.stroke();
 
-  // Body.
-  ctx.fillStyle = s.primary;
+  // Body: a deeper barrel than a flat ellipse, with a darker underside so the
+  // silhouette has a top and a bottom rather than reading as a slab.
   ctx.beginPath();
-  ctx.ellipse(0, -h * 0.56, len * 0.46, h * 0.24, 0, 0, TAU);
+  ctx.ellipse(0, -h * 0.66, len * 0.46, h * 0.27, 0, 0, TAU);
+  fillOutlined(ctx, s.primary, h * 0.05);
+  ctx.fillStyle = alpha(darken(s.primary, 0.45), 0.7);
+  ctx.beginPath();
+  ctx.ellipse(0, -h * 0.56, len * 0.42, h * 0.13, 0, 0, TAU);
+  ctx.fill();
+  // Shoulder mass over the front legs.
+  ctx.fillStyle = mix(s.primary, C.white, 0.06);
+  ctx.beginPath();
+  ctx.ellipse(len * 0.2, -h * 0.7, len * 0.2, h * 0.23, 0, 0, TAU);
   ctx.fill();
   // Back ridge in the accent colour: the "corrupted" tell on shadow beasts.
-  ctx.fillStyle = alpha(s.accent, 0.75);
+  ctx.fillStyle = alpha(s.accent, 0.8);
   ctx.beginPath();
-  ctx.moveTo(-len * 0.30, -h * 0.74);
+  ctx.moveTo(-len * 0.30, -h * 0.84);
   for (let i = 0; i <= 4; i++) {
     const t = i / 4;
-    ctx.lineTo(-len * 0.30 + t * len * 0.58, -h * (0.78 + (i % 2) * 0.06));
+    ctx.lineTo(-len * 0.30 + t * len * 0.58, -h * (0.9 + (i % 2) * 0.08));
   }
-  ctx.lineTo(len * 0.26, -h * 0.66);
+  ctx.lineTo(len * 0.26, -h * 0.8);
   ctx.closePath();
   ctx.fill();
 
   // Head + snout.
-  const headX = len * 0.46;
-  const headY = -h * 0.70;
+  const headX = len * 0.52;
+  const headY = -h * 0.82;
+  ctx.beginPath();
+  ctx.ellipse(headX, headY, h * 0.29, h * 0.25, -0.15, 0, TAU);
+  fillOutlined(ctx, mix(s.primary, s.secondary, 0.4), h * 0.04);
+  // Neck, joining head to body so the head does not float.
+  ctx.fillStyle = mix(s.primary, s.secondary, 0.2);
+  ctx.beginPath();
+  ctx.ellipse(len * 0.34, -h * 0.74, h * 0.2, h * 0.18, 0.3, 0, TAU);
+  ctx.fill();
   ctx.fillStyle = mix(s.primary, s.secondary, 0.4);
   ctx.beginPath();
-  ctx.ellipse(headX, headY, h * 0.22, h * 0.18, -0.15, 0, TAU);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(headX + h * 0.10, headY - h * 0.02);
-  ctx.lineTo(headX + h * 0.34, headY + h * 0.06);
-  ctx.lineTo(headX + h * 0.10, headY + h * 0.12);
+  ctx.moveTo(headX + h * 0.14, headY - h * 0.02);
+  ctx.lineTo(headX + h * 0.46, headY + h * 0.08);
+  ctx.lineTo(headX + h * 0.14, headY + h * 0.18);
   ctx.closePath();
   ctx.fill();
   // Ears.
   ctx.fillStyle = darken(s.primary, 0.2);
-  for (const off of [-0.06, 0.06]) {
+  for (const off of [-0.14, 0.04]) {
     ctx.beginPath();
-    ctx.moveTo(headX + off * h, headY - h * 0.14);
-    ctx.lineTo(headX + off * h + h * 0.04, headY - h * 0.32);
-    ctx.lineTo(headX + off * h + h * 0.10, headY - h * 0.12);
+    ctx.moveTo(headX + off * h, headY - h * 0.18);
+    ctx.lineTo(headX + off * h + h * 0.05, headY - h * 0.44);
+    ctx.lineTo(headX + off * h + h * 0.14, headY - h * 0.16);
     ctx.closePath();
     ctx.fill();
   }
@@ -724,7 +813,7 @@ function drawBeast(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPose):
     ctx.shadowColor = s.eyeColor;
     ctx.shadowBlur = h * 0.2;
     ctx.beginPath();
-    ctx.ellipse(headX + h * 0.08, headY - h * 0.02, h * 0.045, h * 0.032, 0, 0, TAU);
+    ctx.ellipse(headX + h * 0.1, headY - h * 0.03, h * 0.055, h * 0.04, 0, 0, TAU);
     ctx.fill();
     ctx.shadowBlur = 0;
   }
@@ -733,9 +822,9 @@ function drawBeast(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPose):
     ctx.fillStyle = C.bone;
     for (let i = 0; i < 3; i++) {
       ctx.beginPath();
-      ctx.moveTo(headX + h * (0.16 + i * 0.06), headY + h * 0.04);
-      ctx.lineTo(headX + h * (0.19 + i * 0.06), headY + h * 0.12);
-      ctx.lineTo(headX + h * (0.22 + i * 0.06), headY + h * 0.04);
+      ctx.moveTo(headX + h * (0.2 + i * 0.07), headY + h * 0.08);
+      ctx.lineTo(headX + h * (0.235 + i * 0.07), headY + h * 0.18);
+      ctx.lineTo(headX + h * (0.27 + i * 0.07), headY + h * 0.08);
       ctx.closePath();
       ctx.fill();
     }

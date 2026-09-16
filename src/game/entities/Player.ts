@@ -3,9 +3,9 @@ import { tryGetItem } from '../../data/items';
 import type { Controls } from '../../engine/Controls';
 import { clamp, clamp01, damp } from '../../engine/math';
 import { state } from '../GameState';
-import { computeStats, type EffectiveStats } from '../systems/StatsSystem';
+import { computeStats, modifyAbilityValue, type EffectiveStats } from '../systems/StatsSystem';
 import { mitigate } from '../progression';
-import type { CharacterDef, DamageEvent, StatBlock } from '../types';
+import type { CharacterDef, DamageEvent, StatBlock, StatKey } from '../types';
 import { emptyStats } from '../types';
 import { Actor, type WorldLike } from './Entity';
 
@@ -40,9 +40,6 @@ export class Player extends Actor {
   dodgeCooldown = 0;
   dodgeDirX = 1;
   dodgeDirY = 0;
-
-  /** Ability id -> seconds remaining. */
-  cooldowns: Record<string, number> = {};
 
   /** Seconds since the player last took or dealt damage. */
   outOfCombat = 0;
@@ -111,6 +108,34 @@ export class Player extends Actor {
     return this.stats.total.defense;
   }
 
+  override statValue(stat: StatKey): number {
+    return this.stats.total[stat];
+  }
+
+  override get critChance(): number {
+    return this.stats.critChance;
+  }
+
+  override get critDamage(): number {
+    return this.stats.critDamage;
+  }
+
+  override get lifesteal(): number {
+    return this.stats.passives.lifesteal;
+  }
+
+  override get spellVamp(): number {
+    return this.stats.passives.spellVamp;
+  }
+
+  override modifyAbility(abilityId: string, field: string, value: number): number {
+    const modified = modifyAbilityValue(this.stats.abilityMods, abilityId, field, value);
+    if (field === 'cooldown') {
+      return modified * (1 - Math.min(0.6, this.stats.passives.cooldownReduction));
+    }
+    return modified;
+  }
+
   get isBlocking(): boolean {
     return this.pose.block > 0.5;
   }
@@ -131,12 +156,6 @@ export class Player extends Actor {
     this.dodgeCooldown = Math.max(0, this.dodgeCooldown - dt);
     this.comboWindow = Math.max(0, this.comboWindow - dt);
     if (this.comboWindow <= 0) this.comboStep = 0;
-
-    for (const key of Object.keys(this.cooldowns)) {
-      const left = this.cooldowns[key] - dt;
-      if (left <= 0) delete this.cooldowns[key];
-      else this.cooldowns[key] = left;
-    }
 
     let buffsChanged = false;
     for (let i = this.consumableBuffs.length - 1; i >= 0; i--) {

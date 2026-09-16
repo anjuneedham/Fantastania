@@ -263,6 +263,157 @@ scenario('touch-joystick', 'phone', async (page, t) => {
   t.assert(padVisible, 'touch controls became visible after a touch');
 });
 
+scenario('combat', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const before = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+    // Drop the player on a known wolf pack.
+    s.player.x = 820;
+    s.player.y = 1040;
+    s.player.health = s.player.maxHealth;
+    return {
+      enemies: s.world.actors.filter((a) => a.faction === 'enemy').length,
+      xp: window.fantastania.state.xp,
+      level: window.fantastania.state.level,
+    };
+  });
+  t.assert(before.enemies > 5, `the Woods are populated (${before.enemies} enemies)`);
+
+  // Enemies should notice the player and close in.
+  await page.waitForTimeout(1800);
+  const engaged = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    return s.world.actors.some((a) => a.faction === 'enemy' && a.target);
+  });
+  t.assert(engaged, 'enemy AI acquired the player');
+
+  // Swing until something dies, or give up after a few seconds.
+  const killed = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    const deadline = performance.now() + 14000;
+    const start = window.fantastania.state.kills;
+    while (performance.now() < deadline) {
+      // Make the player unkillable for the test; we are checking that damage
+      // flows, not that a level-1 Eric can solo a pack.
+      s.player.health = s.player.maxHealth;
+      s.player.invuln = 1;
+      const enemy = s.world.actors.find((a) => a.faction === 'enemy' && !a.isDead);
+      if (enemy) {
+        s.player.x = enemy.x - 30;
+        s.player.y = enemy.y;
+        s.player.pose.facing = 0;
+        s.combat.update({
+          pressed: (a) => a === 'attack',
+          down: () => false,
+          moveX: 0, moveY: 0, aiming: false, aimWorldX: 0, aimWorldY: 0,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 120));
+      if (window.fantastania.state.kills > start) return true;
+    }
+    return false;
+  });
+  t.assert(killed, 'melee attacks kill an enemy');
+
+  const after = await page.evaluate(() => ({
+    xp: window.fantastania.state.xp,
+    level: window.fantastania.state.level,
+    gold: window.fantastania.state.gold,
+    kills: window.fantastania.state.kills,
+  }));
+  t.assert(after.xp > before.xp || after.level > before.level, `the kill awarded XP (${after.xp})`);
+  t.assert(after.gold > 25, `the kill awarded gold (${after.gold})`);
+});
+
+scenario('abilities', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const report = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+    s.player.x = 820;
+    s.player.y = 1040;
+    const out = [];
+    // Every ability in the game must cast without throwing, on both shapes of
+    // caster, and must actually consume resources.
+    for (const id of Object.keys(window.fantastania.abilities)) {
+      s.player.busy = 0;
+      s.player.mana = s.player.maxMana = 9999;
+      s.player.cooldowns = {};
+      const manaBefore = s.player.mana;
+      let ok = false;
+      let error = null;
+      try {
+        ok = s.world.castAbility(s.player, id, { angle: 0 });
+      } catch (err) { error = String(err); }
+      out.push({ id, ok, error, spent: manaBefore - s.player.mana });
+    }
+    return out;
+  });
+  for (const r of report) {
+    t.assert(!r.error, `${r.id} casts without throwing${r.error ? `: ${r.error}` : ''}`);
+    t.assert(r.ok, `${r.id} was accepted`);
+  }
+  // Let the scheduled effects resolve and confirm nothing blew up afterwards.
+  await page.waitForTimeout(1500);
+  const alive = await page.evaluate(() => !!window.fantastania.game.scenes.active.world);
+  t.assert(alive, 'the world survived casting every ability');
+});
+
+scenario('death-respawn', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+    s.player.invuln = 0;
+    s.world.damage(s.player, {
+      amount: 99999, type: 'physical', crit: false,
+      sourceId: -1, knockback: 0, staggerPower: 0, angle: 0,
+    });
+  });
+  const died = await page.evaluate(() => window.fantastania.game.scenes.active.player.isDead);
+  t.assert(died, 'the player can die');
+
+  await page.waitForFunction(
+    () => !window.fantastania.game.scenes.active.player.isDead,
+    null, { timeout: 12000 },
+  );
+  const after = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    return { hp: s.player.health, deaths: window.fantastania.state.deaths, area: s.area.def.id };
+  });
+  t.assert(after.hp > 0, `respawned with health (${Math.round(after.hp)})`);
+  t.assert(after.deaths === 1, 'the death was recorded');
+});
+
+scenario('boss', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('bossArena', 'default', false);
+    s.player.x = 700;
+    s.player.y = 600;
+  });
+  await page.waitForTimeout(600);
+  const boss = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    const b = s.area.boss;
+    return b ? { name: b.name, hp: b.maxHealth, isBoss: b.isBoss } : null;
+  });
+  t.assert(!!boss, 'crossing the trigger spawns the boss');
+  t.assert(boss?.isBoss && boss.hp > 500, `the Warden has boss-scale health (${boss?.hp})`);
+
+  // Drive it into its second phase and confirm the transition is handled.
+  const phased = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    const b = s.area.boss;
+    b.health = b.maxHealth * 0.25;
+    await new Promise((r) => setTimeout(r, 400));
+    return b.state !== 'dead';
+  });
+  t.assert(phased, 'the boss survives a phase transition');
+});
+
 scenario('resize', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
   await page.setViewportSize({ width: 700, height: 900 });

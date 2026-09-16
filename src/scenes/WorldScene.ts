@@ -4,9 +4,14 @@ import { Scene } from '../engine/Scene';
 import { dist2 } from '../engine/math';
 import { state } from '../game/GameState';
 import { bus } from '../game/events';
+import { Enemy } from '../game/entities/Enemy';
 import { Player } from '../game/entities/Player';
 import type { Portal } from '../game/entities/Portal';
-import { checkRequirement, loadArea, spawnPointFor, type LoadedArea } from '../game/systems/AreaManager';
+import {
+  checkRequirement, loadArea, spawnBoss, spawnPointFor, type LoadedArea,
+} from '../game/systems/AreaManager';
+import { CombatSystem } from '../game/systems/CombatSystem';
+import { RewardSystem } from '../game/systems/RewardSystem';
 import { World } from '../game/World';
 import { WorldRenderer } from '../game/WorldRenderer';
 import { renderPad } from '../ui/padRenderer';
@@ -31,6 +36,8 @@ export class WorldScene extends Scene {
   renderer = new WorldRenderer();
   player!: Player;
   area!: LoadedArea;
+  combat!: CombatSystem;
+  readonly rewards = new RewardSystem();
 
   /** Blocks portal re-entry immediately after arriving. */
   private portalGrace = 0;
@@ -38,12 +45,27 @@ export class WorldScene extends Scene {
   private portalDwell = 0;
   private dwellingPortal: Portal | null = null;
   private transitioning = false;
+  private bossStarted = false;
+  private deathHandled = false;
 
   override async enter(): Promise<void> {
     const { game } = this;
     this.world = new World({ audio: game.audio, camera: game.camera });
     this.player = new Player(state.characterId);
+    this.combat = new CombatSystem(this.world, this.player);
     toasts.attach();
+    this.rewards.attach();
+    this.unsubscribes.push(
+      bus.on('enemyKilled', () => this.markSpawnCleared()),
+    );
+
+    // Resume health and mana from the save rather than arriving at full.
+    if (state.currentHealth >= 0) {
+      this.player.health = Math.min(this.player.maxHealth, state.currentHealth);
+    }
+    if (state.currentMana >= 0) {
+      this.player.mana = Math.min(this.player.maxMana, state.currentMana);
+    }
 
     await this.enterArea(state.currentAreaId, state.spawnPointId, false);
     game.controls.pad.setVisible('block', this.player.def.canBlock);
@@ -52,7 +74,12 @@ export class WorldScene extends Scene {
 
   override exit(): void {
     toasts.detach();
+    this.rewards.detach();
+    for (const off of this.unsubscribes) off();
+    this.unsubscribes.length = 0;
   }
+
+  private unsubscribes: Array<() => void> = [];
 
   /** Loads an area and places the player at one of its spawn points. */
   async enterArea(areaId: string, spawnId: string, fade = true): Promise<void> {
@@ -88,6 +115,7 @@ export class WorldScene extends Scene {
     this.portalGrace = 0.9;
     this.portalDwell = 0;
     this.dwellingPortal = null;
+    this.bossStarted = false;
 
     // Announce the area unless the player has been here before.
     if (!state.discoveredLocations.includes(`area:${areaId}`)) {
@@ -106,6 +134,14 @@ export class WorldScene extends Scene {
     const { game } = this;
     const controls = game.controls;
 
+    // Hit-stop: the world freezes for a few frames on a solid connect, while
+    // UI and effects keep running on the real delta.
+    let worldDt = dt;
+    if (this.world.hitStop > 0) {
+      this.world.hitStop = Math.max(0, this.world.hitStop - dt);
+      worldDt = dt * 0.12;
+    }
+
     if (controls.pressed('dodge')) {
       if (this.player.startDodge(controls.moveX, controls.moveY)) {
         this.world.sfx('dodge');
@@ -115,16 +151,110 @@ export class WorldScene extends Scene {
       }
     }
 
-    this.player.applyInput(controls, dt, this.world);
-    this.world.update(dt);
+    this.combat.update(controls);
+    this.player.applyInput(controls, worldDt, this.world);
+    this.world.update(worldDt);
     this.renderer.update(dt, this.world, game.camera, game.renderer);
     toasts.update(dt);
 
     this.updatePortals(dt);
     this.checkDiscoveries();
+    this.updateBoss();
+    this.updateDeath(dt);
+
+    // Keep the save's mirrored pools current so a reload resumes mid-fight.
+    state.currentHealth = this.player.health;
+    state.currentMana = this.player.mana;
 
     game.camera.follow(this.player.x, this.player.y - 24, dt);
     game.camera.clampToBounds(game.renderer.viewWidth, game.renderer.viewHeight);
+  }
+
+  /** Marks a spawn group cleared once none of its members are still alive. */
+  private markSpawnCleared(): void {
+    const groups = new Set<string>();
+    for (const enemy of this.world.actors) {
+      if (enemy instanceof Enemy && !enemy.isDead && enemy.spawnId) groups.add(enemy.spawnId);
+    }
+    for (const spawn of this.area.def.enemies ?? []) {
+      if (spawn.respawn) continue;
+      const key = `${this.area.def.id}:${spawn.id}`;
+      if (!groups.has(key) && !state.clearedSpawns.includes(key)) {
+        state.clearedSpawns.push(key);
+      }
+    }
+  }
+
+  /** Starts the boss fight when the player crosses the trigger radius. */
+  private updateBoss(): void {
+    const encounter = this.area.def.boss;
+    if (!encounter || this.bossStarted || this.player.isDead) return;
+    if (state.hasFlag(encounter.defeatFlag)) return;
+
+    const r = encounter.triggerRadius;
+    if (dist2(this.player.x, this.player.y, encounter.x, encounter.y) > r * r) return;
+
+    this.bossStarted = true;
+    const boss = spawnBoss(this.world, this.area.def);
+    if (!boss) return;
+    this.area.boss = boss;
+    boss.onPhaseChange = (_phase, line) => {
+      if (line) toasts.showTitle(line, undefined, 3);
+    };
+
+    this.game.audio.playMusic(encounter.music ?? 'theme_boss');
+    this.world.shake(14);
+    this.world.sfx('boss_roar');
+    toasts.showTitle(boss.name, encounter.introLine, 4.2);
+  }
+
+  /** Handles the death screen timing and respawning. */
+  private updateDeath(dt: number): void {
+    const player = this.player;
+    if (!player.isDead) return;
+
+    if (!this.deathHandled) {
+      this.deathHandled = true;
+      state.deaths++;
+      bus.emit('playerDied', { areaId: this.area.def.id });
+      this.game.audio.stopMusic();
+      toasts.showTitle('You fall.', 'Aetheria carries on without you.', 3.4);
+      player.respawnTimer = 3.2;
+    }
+
+    player.respawnTimer -= dt;
+    if (player.respawnTimer > 0) return;
+
+    this.deathHandled = false;
+    void this.respawnPlayer();
+  }
+
+  private async respawnPlayer(): Promise<void> {
+    // Respawn at the area's respawn point; a boss arena sends you back to the
+    // shrine instead, so a wipe is a real setback without being a long walk.
+    const def = this.area.def;
+    const target = def.boss ? 'forgottenShrine' : def.id;
+    const spawnId = def.boss ? 'fromArena' : 'respawn';
+
+    this.transitioning = true;
+    await this.game.scenes.fadeOut(0.5);
+    if (target !== def.id) {
+      this.area = loadArea(this.world, target);
+      this.renderer.setArea(this.area.def);
+      state.currentAreaId = target;
+      this.world.addNow(this.player);
+      this.game.camera.bounds = this.world.bounds;
+    }
+    const spawn = spawnPointFor(this.area.def, spawnId);
+    this.player.respawn(spawn.x, spawn.y);
+    this.game.camera.snapTo(spawn.x, spawn.y);
+    this.game.camera.clampToBounds(this.game.renderer.viewWidth, this.game.renderer.viewHeight);
+    this.game.audio.playMusic(this.area.def.music);
+    this.portalGrace = 1.2;
+    this.bossStarted = false;
+    bus.emit('playerRespawned', { areaId: this.area.def.id });
+    this.game.scenes.fadeIn(0.5);
+    this.transitioning = false;
   }
 
   /**
