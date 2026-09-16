@@ -31,11 +31,15 @@ export interface ActorSprite {
   primary: string;
   secondary: string;
   accent: string;
+  /** Trousers/lower body. Falls back to a darkened `primary`. */
+  legs?: string;
   cloak?: string;
   hood?: boolean;
   horns?: boolean;
   eyeColor?: string;
   eyeCount?: number;
+  /** Eyes that emit light (spirits, corrupted things). Default false. */
+  eyeGlow?: boolean;
   /** Ambient glow around the actor; the visual tell for magical beings. */
   aura?: { color: string; radius: number; intensity: number };
   weapon?: WeaponVisual;
@@ -76,6 +80,26 @@ export function createPose(): ActorPose {
     squash: 1,
     block: 0,
   };
+}
+
+/**
+ * Fills the current path and traces it with a darker contour.
+ *
+ * Small figures on textured ground lose their silhouette without one, and a
+ * contour costs a single extra stroke per body part.
+ */
+function fillOutlined(
+  ctx: CanvasRenderingContext2D,
+  color: string,
+  lineWidth: number,
+  outlineStrength = 0.55,
+): void {
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = darken(color, outlineStrength);
+  ctx.lineWidth = lineWidth;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
 }
 
 /** Which of the three view angles a facing direction reads as. */
@@ -194,9 +218,9 @@ function drawHumanoid(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPos
     + Math.sin(p.animTime * 1.8) * h * 0.012;
   const lean = p.moveSpeed01 * 0.10 * flip + (p.stagger > 0 ? -0.18 * flip : 0);
 
-  const hipY = -h * 0.42;
-  const shoulderY = -h * 0.74;
-  const headY = -h * 0.86;
+  const hipY = -h * 0.40;
+  const shoulderY = -h * 0.70;
+  const headY = -h * 0.84;
 
   ctx.save();
   ctx.translate(0, -bob);
@@ -216,23 +240,30 @@ function drawHumanoid(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPos
   }
 
   // Back arm + weapon, drawn first so it sits behind the torso.
-  drawArm(ctx, s, p, -w * 0.72 * flip, shoulderY, -stride, h, flip, false);
+  drawArm(ctx, s, p, -w * 0.62 * flip, shoulderY, -stride, h, flip, false);
 
   // Legs.
-  const legW = w * 0.34;
-  const legColor = bone ? s.skin : darken(s.secondary, 0.15);
-  drawLimb(ctx, -legW * 0.9, hipY, stride * h * 0.16, h * 0.42, legW, legColor, bone);
-  drawLimb(ctx, legW * 0.9, hipY, -stride * h * 0.16, h * 0.42, legW, legColor, bone);
+  const legW = w * 0.36;
+  const legColor = bone ? s.skin : (s.legs ?? darken(s.primary, 0.42));
+  drawLimb(ctx, -legW * 0.78, hipY, stride * h * 0.16, h * 0.40, legW, legColor, bone);
+  drawLimb(ctx, legW * 0.78, hipY, -stride * h * 0.16, h * 0.40, legW, legColor, bone);
 
   // Torso.
-  ctx.fillStyle = s.primary;
   ctx.beginPath();
   roundedTrapezoid(ctx, 0, shoulderY, hipY + h * 0.03, w * 0.92, w * 0.72, h * 0.06);
+  fillOutlined(ctx, s.primary, h * 0.035);
+  // Upper-left key light on the chest, matching the world's lighting.
+  ctx.fillStyle = alpha(lighten(s.primary, 0.3), 0.5);
+  ctx.beginPath();
+  ctx.ellipse(-w * 0.2, shoulderY + h * 0.09, w * 0.22, h * 0.07, -0.4, 0, TAU);
   ctx.fill();
 
-  // Belt / trim: a bright horizontal break that makes the silhouette read.
+  // Belt: a narrow band at the waist. It exists to break the torso's vertical
+  // mass, so it stays thin — a thick one reads as a stripe, not a garment.
   ctx.fillStyle = s.secondary;
-  ctx.fillRect(-w * 0.76, hipY - h * 0.03, w * 1.52, h * 0.05);
+  ctx.fillRect(-w * 0.40, hipY - h * 0.012, w * 0.80, h * 0.034);
+  ctx.fillStyle = darken(s.secondary, 0.45);
+  ctx.fillRect(-w * 0.09, hipY - h * 0.016, w * 0.18, h * 0.042);
 
   if (bone) drawRibs(ctx, w, shoulderY, hipY, s.skin);
 
@@ -267,7 +298,7 @@ function drawHumanoid(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPos
   }
 
   // Front arm + weapon.
-  drawArm(ctx, s, p, w * 0.72 * flip, shoulderY, stride, h, flip, true);
+  drawArm(ctx, s, p, w * 0.62 * flip, shoulderY, stride, h, flip, true);
 
   ctx.restore();
 }
@@ -282,7 +313,7 @@ function drawHead(
   flip: number,
   front: number,
 ): void {
-  const r = w * 0.52;
+  const r = w * 0.60;
   const nod = Math.sin(p.animTime * 2.3) * h * 0.006;
   ctx.save();
   ctx.translate(0, headY + nod);
@@ -301,10 +332,9 @@ function drawHead(
     ctx.ellipse(flip * r * 0.1, r * 0.05, r * 0.72, r * 0.68, 0, 0, TAU);
     ctx.fill();
   } else {
-    ctx.fillStyle = s.skin;
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, TAU);
-    ctx.fill();
+    fillOutlined(ctx, s.skin, r * 0.16);
 
     if (s.shape === 'skeleton') {
       // Skull: eye sockets and a jaw line, no hair.
@@ -320,14 +350,28 @@ function drawHead(
       ctx.lineTo(r * 0.45, r * 0.5);
       ctx.stroke();
     } else {
-      // Hair as a cap that extends further on the back-facing view.
-      ctx.fillStyle = s.hair;
-      ctx.beginPath();
-      ctx.arc(0, -r * 0.12, r * 1.02, Math.PI, TAU);
-      ctx.lineTo(r * 1.02, front < -0.3 ? r * 0.8 : -r * 0.1);
-      ctx.lineTo(-r * 1.02, front < -0.3 ? r * 0.8 : -r * 0.1);
-      ctx.closePath();
-      ctx.fill();
+      // Hair. From behind it covers the whole head; from the front it is a cap
+      // cut off well above the eye line plus two short side locks. Expressed as
+      // an explicit arc sweep rather than a clipped shape, because "how much of
+      // the face is covered" is the single number that decides whether this
+      // reads as a character or as a brown blob.
+      if (front < -0.3) {
+        ctx.beginPath();
+        ctx.arc(0, -r * 0.06, r * 1.02, 0, TAU);
+        fillOutlined(ctx, s.hair, r * 0.1);
+      } else {
+        // 1.13π → 1.87π leaves the cap's lower edge at about 0.4r above centre.
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 1.03, Math.PI * 1.13, Math.PI * 1.87);
+        ctx.closePath();
+        fillOutlined(ctx, s.hair, r * 0.1);
+        ctx.fillStyle = s.hair;
+        for (const side of [-1, 1]) {
+          ctx.beginPath();
+          ctx.ellipse(side * r * 0.84, -r * 0.16, r * 0.22, r * 0.4, side * 0.18, 0, TAU);
+          ctx.fill();
+        }
+      }
     }
   }
 
@@ -343,21 +387,45 @@ function drawHead(
     }
   }
 
-  // Eyes: only drawn facing towards camera. Glowing eyes are the fastest way to
-  // make a silhouette feel alive at this size.
+  // Eyes: only drawn facing towards camera. At this sprite size they are the
+  // single clearest signal that a shape is a character, so they get real
+  // contrast — dark on skin for people, emissive for anything that glows.
   if (front > -0.35 && s.eyeColor) {
     const n = s.eyeCount ?? 2;
-    const glow = 0.6 + Math.sin(p.animTime * 3.1) * 0.15;
-    ctx.fillStyle = s.eyeColor;
-    ctx.shadowColor = s.eyeColor;
-    ctx.shadowBlur = r * 0.9 * glow;
-    for (let i = 0; i < n; i++) {
-      const spread = n === 1 ? 0 : (i / (n - 1) - 0.5) * r * 0.9;
+    const eyeY = s.hood ? 0 : -r * 0.06;
+
+    if (!s.hood) {
+      // Brow shadow gives the eyes something to sit against.
+      ctx.fillStyle = alpha(C.void, 0.14);
       ctx.beginPath();
-      ctx.ellipse(spread + flip * r * 0.08, s.hood ? 0 : -r * 0.05, r * 0.15, r * 0.19, 0, 0, TAU);
+      ctx.ellipse(0, -r * 0.3, r * 0.74, r * 0.2, 0, 0, Math.PI);
+      ctx.fill();
+    }
+
+    if (s.eyeGlow) {
+      const glow = 0.6 + Math.sin(p.animTime * 3.1) * 0.15;
+      ctx.shadowColor = s.eyeColor;
+      ctx.shadowBlur = r * 0.9 * glow;
+    }
+    ctx.fillStyle = s.eyeColor;
+    for (let i = 0; i < n; i++) {
+      const spread = n === 1 ? 0 : (i / (n - 1) - 0.5) * r * 0.86;
+      ctx.beginPath();
+      ctx.ellipse(spread + flip * r * 0.06, eyeY, r * 0.16, r * 0.22, 0, 0, TAU);
       ctx.fill();
     }
     ctx.shadowBlur = 0;
+
+    // Catchlight: one bright pixel per eye. Costs nothing, reads as alive.
+    if (!s.eyeGlow) {
+      ctx.fillStyle = alpha(C.white, 0.75);
+      for (let i = 0; i < n; i++) {
+        const spread = n === 1 ? 0 : (i / (n - 1) - 0.5) * r * 0.86;
+        ctx.beginPath();
+        ctx.arc(spread + flip * r * 0.06 - r * 0.05, eyeY - r * 0.07, r * 0.055, 0, TAU);
+        ctx.fill();
+      }
+    }
   }
 
   ctx.restore();
@@ -374,9 +442,10 @@ function drawArm(
   flip: number,
   isWeaponHand: boolean,
 ): void {
-  const armW = h * 0.085 * s.build;
-  const armLen = h * 0.30;
-  let angle = swing * 0.5;
+  const armW = h * 0.075 * s.build;
+  const armLen = h * 0.28;
+  // A small resting splay stops the arms disappearing into the torso outline.
+  let angle = swing * 0.5 + (isWeaponHand ? 0.12 : -0.1) * flip;
 
   // Attack animation: wind up behind, then sweep forward with an ease-out.
   if (isWeaponHand && p.attackProgress >= 0) {
@@ -397,8 +466,12 @@ function drawArm(
   ctx.translate(x, shoulderY + h * 0.03);
   ctx.rotate(angle * flip);
 
-  ctx.fillStyle = s.shape === 'skeleton' ? s.skin : mix(s.primary, s.skin, 0.25);
   capsule(ctx, 0, 0, 0, armLen, armW);
+  fillOutlined(ctx, s.shape === 'skeleton' ? s.skin : mix(s.primary, s.skin, 0.3), armW * 0.22);
+  // Hand, so the weapon has something to be held by.
+  ctx.fillStyle = s.skin;
+  ctx.beginPath();
+  ctx.arc(0, armLen, armW * 0.56, 0, TAU);
   ctx.fill();
 
   if (isWeaponHand && s.weapon && s.weapon.kind !== 'none') {
@@ -420,12 +493,16 @@ function drawLimb(
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(swing * 0.04);
-  ctx.fillStyle = color;
   capsule(ctx, 0, 0, swing * 0.3, len, width);
+  ctx.fillStyle = color;
   ctx.fill();
+  ctx.strokeStyle = darken(color, 0.5);
+  ctx.lineWidth = width * 0.3;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
   if (!bone) {
     // Boot: a darker block at the foot grounds the figure.
-    ctx.fillStyle = darken(color, 0.4);
+    ctx.fillStyle = darken(color, 0.55);
     ctx.beginPath();
     ctx.ellipse(swing * 0.3, len, width * 0.72, width * 0.42, 0, 0, TAU);
     ctx.fill();

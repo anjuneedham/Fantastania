@@ -116,17 +116,125 @@ scenario('camera-follow', 'desktop', async (page, t) => {
 
 scenario('collision', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
-  // Park the player left of a known wall and push into it for a full second.
+  // Homestead's north ridge runs along y < 120; walk into it and stop.
   await page.evaluate(() => {
     const s = window.fantastania.game.scenes.active;
-    s.player.x = 1100;
+    s.player.x = 800;
+    s.player.y = 260;
+  });
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(1200);
+  await page.keyboard.up('KeyW');
+  const pos = await t.playerPos(page);
+  t.assert(pos.y > 115, `ridge stopped the player (y=${pos.y.toFixed(1)}, wall ends at 120)`);
+
+  const clear = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    // Nothing should ever be left standing inside authored collision geometry.
+    return s.world.props.every((p) =>
+      !(s.area.def.walls ?? []).some((w) =>
+        p.x > w.x && p.x < w.x + w.w && p.y > w.y && p.y < w.y + w.h));
+  });
+  t.assert(clear, 'no scatter prop was placed inside a wall');
+});
+
+scenario('area-population', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const info = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    return {
+      area: s.area.def.id,
+      props: s.world.props.length,
+      obstacles: s.world.obstacles.length,
+      portals: s.area.portals.length,
+      sorted: s.world.props.every((p, i, arr) => i === 0 || arr[i - 1].y <= p.y),
+    };
+  });
+  t.assert(info.area === 'homestead', `starts in the Homestead (got ${info.area})`);
+  t.assert(info.props > 40, `area is populated (${info.props} props)`);
+  t.assert(info.obstacles > 10, `collision geometry built (${info.obstacles} obstacles)`);
+  t.assert(info.portals === 1, `portals created (${info.portals})`);
+  t.assert(info.sorted, 'props are pre-sorted by depth');
+});
+
+scenario('area-transition', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  // Walk into the eastern portal and wait for the dwell + fade.
+  await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    s.player.x = 1740;
+    s.player.y = 650;
+  });
+  await page.waitForFunction(
+    () => window.fantastania.game.scenes.active.area.def.id === 'whisperingWoods',
+    null,
+    { timeout: 8000 },
+  );
+  const after = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    const { state } = window.fantastania;
+    return {
+      area: s.area.def.id,
+      saved: state.currentAreaId,
+      unlocked: state.unlockedAreas.includes('whisperingWoods'),
+      px: s.player.x,
+      py: s.player.y,
+      props: s.world.props.length,
+    };
+  });
+  t.assert(after.area === 'whisperingWoods', 'portal moved the player to the Woods');
+  t.assert(after.saved === 'whisperingWoods', 'game state tracks the current area');
+  t.assert(after.unlocked, 'the new area was unlocked');
+  t.assert(after.props > 100, `the Woods are densely populated (${after.props} props)`);
+  // And the arrival must not immediately bounce back through the return portal.
+  await page.waitForTimeout(1200);
+  const stayed = await page.evaluate(
+    () => window.fantastania.game.scenes.active.area.def.id,
+  );
+  t.assert(stayed === 'whisperingWoods', 'arrival grace stops an instant bounce-back');
+});
+
+scenario('locked-portal', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+    // The cave mouth needs the Resonant Sigil, which a level-1 player lacks.
+    s.player.x = 2540;
     s.player.y = 900;
   });
-  await page.keyboard.down('KeyD');
-  await page.waitForTimeout(1000);
-  await page.keyboard.up('KeyD');
-  const pos = await t.playerPos(page);
-  t.assert(pos.x < 1200, `wall stopped the player (x=${pos.x.toFixed(1)}, wall at 1200)`);
+  await page.waitForTimeout(1500);
+  const area = await page.evaluate(
+    () => window.fantastania.game.scenes.active.area.def.id,
+  );
+  t.assert(area === 'whisperingWoods', 'a gated portal refuses an unqualified player');
+});
+
+scenario('all-areas-load', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const report = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    const ids = Object.keys(window.fantastania.areas);
+    const out = [];
+    for (const id of ids) {
+      try {
+        await s.enterArea(id, 'default', false);
+        out.push({
+          id,
+          props: s.world.props.length,
+          ok: s.world.isClear(s.player.x, s.player.y, s.player.radius),
+        });
+      } catch (err) {
+        out.push({ id, error: String(err) });
+      }
+    }
+    return out;
+  });
+  for (const r of report) {
+    t.assert(!r.error, `${r.id} loads without error${r.error ? `: ${r.error}` : ''}`);
+    t.assert(r.ok, `${r.id} spawns the player in clear space`);
+  }
+  t.assert(report.length === 6, `all six regions are registered (${report.length})`);
 });
 
 scenario('touch-joystick', 'phone', async (page, t) => {

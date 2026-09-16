@@ -53,6 +53,9 @@ const PAD_ACTIONS: Partial<Record<ActionId, PadButtonId>> = {
   pause: 'pause',
 };
 
+/** How long after the last mouse movement the cursor still steers facing. */
+const MOUSE_AIM_TIMEOUT_MS = 1600;
+
 export class Controls {
   readonly input: Input;
   readonly pad = new VirtualPad();
@@ -102,9 +105,15 @@ export class Controls {
     this.moveX = mx;
     this.moveY = my;
 
-    // Desktop aims with the mouse; touch relies on movement direction plus the
-    // combat system's soft target assist.
-    if (!this.input.touchActive) {
+    // Desktop aims with the mouse, but only while the mouse is actually being
+    // used: a resting cursor must not pin the character's facing to wherever it
+    // happens to sit (including the top-left corner it starts at). Otherwise
+    // facing follows movement, which is what a keyboard-only player expects.
+    const mouseFresh =
+      this.input.mouseEverMoved &&
+      (this.input.mouseDown ||
+        performance.now() - this.input.lastMouseMove < MOUSE_AIM_TIMEOUT_MS);
+    if (!this.input.touchActive && mouseFresh) {
       camera.viewToWorld(this.input.mouseX, this.input.mouseY, r, this.scratch);
       this.aimWorldX = this.scratch.x;
       this.aimWorldY = this.scratch.y;

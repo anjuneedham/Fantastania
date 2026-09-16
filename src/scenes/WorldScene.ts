@@ -1,68 +1,219 @@
 import { C, alpha, bodyFont } from '../art/palette';
-import { Scene } from '../engine/Scene';
 import type { Renderer } from '../engine/Renderer';
-import { Player } from '../game/entities/Player';
-import { World } from '../game/World';
+import { Scene } from '../engine/Scene';
+import { dist2 } from '../engine/math';
 import { state } from '../game/GameState';
+import { bus } from '../game/events';
+import { Player } from '../game/entities/Player';
+import type { Portal } from '../game/entities/Portal';
+import { checkRequirement, loadArea, spawnPointFor, type LoadedArea } from '../game/systems/AreaManager';
+import { World } from '../game/World';
+import { WorldRenderer } from '../game/WorldRenderer';
 import { renderPad } from '../ui/padRenderer';
+import { toasts } from '../ui/toasts';
 
 /**
- * The gameplay scene. Owns the World, drives the player's input and renders the
- * world through the camera.
+ * The gameplay scene: owns the World, drives the player, and handles area
+ * transitions, landmark discovery and secrets.
  *
- * Phase 1 scope: a walkable test field that proves movement, collision, camera
- * follow and the touch controls. The area system replaces the hard-coded
- * geometry in Phase 2.
+ * Everything area-specific comes from the AreaDef, so this file never mentions
+ * the Woods or the Ruins by name.
  */
+/**
+ * Camera zoom for gameplay. Tuned so a character is roughly a tenth of the
+ * screen height on a phone — big enough to read their facing and animation,
+ * small enough to see an enemy coming.
+ */
+const WORLD_ZOOM = 1.25;
+
 export class WorldScene extends Scene {
   world!: World;
+  renderer = new WorldRenderer();
   player!: Player;
+  area!: LoadedArea;
+
+  /** Blocks portal re-entry immediately after arriving. */
+  private portalGrace = 0;
+  /** Seconds the player has been standing in a portal. */
+  private portalDwell = 0;
+  private dwellingPortal: Portal | null = null;
+  private transitioning = false;
 
   override async enter(): Promise<void> {
     const { game } = this;
     this.world = new World({ audio: game.audio, camera: game.camera });
-    this.world.bounds = { x: 0, y: 0, w: 2200, h: 1500 };
-
-    // Temporary geometry so collision has something to resolve against.
-    this.world.obstacles = [
-      { kind: 'rect', x: 400, y: 300, w: 220, h: 60 },
-      { kind: 'rect', x: 1200, y: 800, w: 80, h: 340 },
-      { kind: 'circle', x: 900, y: 520, r: 70 },
-      { kind: 'circle', x: 1600, y: 380, r: 48 },
-    ];
-
     this.player = new Player(state.characterId);
-    this.player.x = 300;
-    this.player.y = 750;
+    toasts.attach();
+
+    await this.enterArea(state.currentAreaId, state.spawnPointId, false);
+    game.controls.pad.setVisible('block', this.player.def.canBlock);
+    game.scenes.fadeIn(0.6);
+  }
+
+  override exit(): void {
+    toasts.detach();
+  }
+
+  /** Loads an area and places the player at one of its spawn points. */
+  async enterArea(areaId: string, spawnId: string, fade = true): Promise<void> {
+    const { game } = this;
+    if (fade) {
+      this.transitioning = true;
+      await game.scenes.fadeOut(0.3);
+    }
+
+    this.area = loadArea(this.world, areaId);
+    this.renderer.setArea(this.area.def);
+
+    const spawn = spawnPointFor(this.area.def, spawnId);
+    this.player.x = spawn.x;
+    this.player.y = spawn.y;
+    this.player.pose.facing = spawn.facing;
+    this.player.vx = 0;
+    this.player.vy = 0;
     this.world.addNow(this.player);
 
+    state.currentAreaId = areaId;
+    state.spawnPointId = spawnId;
+    state.unlockArea(areaId);
+
     game.camera.bounds = this.world.bounds;
+    game.camera.zoom = WORLD_ZOOM;
     game.camera.snapTo(this.player.x, this.player.y);
     game.camera.clampToBounds(game.renderer.viewWidth, game.renderer.viewHeight);
 
-    game.controls.pad.setVisible('block', this.player.def.canBlock);
-    game.audio.playMusic('theme_homestead');
-    this.game.scenes.fadeIn(0.5);
+    game.audio.playMusic(this.area.def.music);
+    bus.emit('areaEntered', { areaId });
+
+    this.portalGrace = 0.9;
+    this.portalDwell = 0;
+    this.dwellingPortal = null;
+
+    // Announce the area unless the player has been here before.
+    if (!state.discoveredLocations.includes(`area:${areaId}`)) {
+      state.discoveredLocations.push(`area:${areaId}`);
+      toasts.showTitle(this.area.def.name, this.area.def.subtitle);
+    }
+
+    if (fade) {
+      game.scenes.fadeIn(0.45);
+      this.transitioning = false;
+    }
   }
 
   override update(dt: number): void {
+    if (this.transitioning) return;
     const { game } = this;
     const controls = game.controls;
 
     if (controls.pressed('dodge')) {
       if (this.player.startDodge(controls.moveX, controls.moveY)) {
         this.world.sfx('dodge');
-        this.world.emitParticles('dust', this.player.x, this.player.y, 8, C.haze, {
-          speed: 70, size: 3, life: 0.4,
+        this.world.emitParticles('dust', this.player.x, this.player.y, 9, C.haze, {
+          speed: 80, size: 3.2, life: 0.45,
         });
       }
     }
 
     this.player.applyInput(controls, dt, this.world);
     this.world.update(dt);
+    this.renderer.update(dt, this.world, game.camera, game.renderer);
+    toasts.update(dt);
 
-    game.camera.follow(this.player.x, this.player.y - 20, dt);
+    this.updatePortals(dt);
+    this.checkDiscoveries();
+
+    game.camera.follow(this.player.x, this.player.y - 24, dt);
     game.camera.clampToBounds(game.renderer.viewWidth, game.renderer.viewHeight);
+  }
+
+  /**
+   * Portals fire after a short dwell rather than on contact, so a player
+   * skirting a doorway in a fight is not yanked out of the area.
+   */
+  private updatePortals(dt: number): void {
+    this.portalGrace = Math.max(0, this.portalGrace - dt);
+
+    let inside: Portal | null = null;
+    for (const portal of this.area.portals) {
+      const gate = checkRequirement(portal.def.requires);
+      portal.unlocked = gate.ok;
+      if (portal.contains(this.player.x, this.player.y)) inside = portal;
+    }
+
+    if (!inside) {
+      this.dwellingPortal = null;
+      this.portalDwell = 0;
+      return;
+    }
+    if (this.portalGrace > 0) return;
+
+    if (this.dwellingPortal !== inside) {
+      this.dwellingPortal = inside;
+      this.portalDwell = 0;
+      const gate = checkRequirement(inside.def.requires);
+      if (!gate.ok) {
+        bus.emit('toast', { text: gate.reason ?? 'The way is closed.', color: C.blood, icon: '🔒' });
+        this.world.sfx('ui_error');
+        // Block re-nagging until the player steps out and back in.
+        this.portalGrace = 1.2;
+      }
+      return;
+    }
+
+    if (!inside.unlocked) return;
+    this.portalDwell += dt;
+    if (this.portalDwell >= 0.35) {
+      this.world.sfx('door');
+      void this.enterArea(inside.def.toArea, inside.def.toSpawn);
+    }
+  }
+
+  /** Landmarks announce themselves; secrets pay out once. */
+  private checkDiscoveries(): void {
+    const px = this.player.x;
+    const py = this.player.y;
+
+    for (let i = this.area.landmarks.length - 1; i >= 0; i--) {
+      const lm = this.area.landmarks[i];
+      if (dist2(px, py, lm.x, lm.y) > lm.radius * lm.radius) continue;
+      this.area.landmarks.splice(i, 1);
+      state.discoveredLocations.push(lm.id);
+      bus.emit('locationDiscovered', { locationId: lm.id, areaId: this.area.def.id });
+      if (lm.message) {
+        toasts.showTitle(lm.name, lm.message, 4.4);
+      } else {
+        bus.emit('toast', { text: `Discovered: ${lm.name}`, color: C.aether, icon: '🧭' });
+      }
+    }
+
+    for (let i = this.area.secrets.length - 1; i >= 0; i--) {
+      const secret = this.area.secrets[i];
+      if (dist2(px, py, secret.x, secret.y) > secret.radius * secret.radius) continue;
+      this.area.secrets.splice(i, 1);
+      state.foundSecrets.push(secret.id);
+      bus.emit('secretFound', { secretId: secret.id, areaId: this.area.def.id });
+
+      this.world.sfx('secret_found');
+      this.world.emitParticles('rune', px, py - 20, 18, C.aetherSoft, {
+        speed: 120, size: 4, life: 1.2, rise: 40,
+      });
+      this.world.particles.ring(px, py, 90, C.aetherSoft, 0.8);
+      toasts.showTitle(secret.name, secret.message, 5);
+
+      const reward = secret.reward;
+      if (reward) {
+        if (reward.xp) state.addXp(reward.xp, 'secret');
+        if (reward.gold) state.addGold(reward.gold);
+        if (reward.itemId) {
+          bus.emit('itemGained', {
+            itemId: reward.itemId,
+            count: reward.count ?? 1,
+            rarity: 'common',
+          });
+        }
+      }
+    }
   }
 
   override render(r: Renderer): void {
@@ -71,66 +222,32 @@ export class WorldScene extends Scene {
 
     ctx.save();
     r.clipToView();
-    this.renderGround(ctx, r);
 
     ctx.save();
     camera.apply(r);
-    this.renderObstacles(ctx);
-    this.world.render(ctx, r.quality);
+    this.renderer.renderGround(ctx, camera, r);
+    this.renderer.renderGlows(ctx, this.world, camera, r, this.game.realTime);
+    this.world.render(ctx, r.quality, camera.visibleRect(r, 120));
+    this.renderer.renderEmissive(ctx, this.world, camera, r, this.game.realTime);
     ctx.restore();
 
+    this.renderer.renderLighting(ctx, r);
+    toasts.render(ctx, r);
     this.renderDebug(ctx, r);
     ctx.restore();
 
     renderPad(ctx, this.game.controls.pad, r);
   }
 
-  private renderGround(ctx: CanvasRenderingContext2D, r: Renderer): void {
-    ctx.fillStyle = C.deepNight;
-    ctx.fillRect(0, 0, r.viewWidth, r.viewHeight);
-
-    // A parallax grid, drawn in view space so only the visible cells are ever
-    // touched regardless of how large the world is.
-    const { camera } = this.game;
-    const cell = 64;
-    const offsetX = -((camera.x - r.viewWidth / 2) % cell);
-    const offsetY = -((camera.y - r.viewHeight / 2) % cell);
-    ctx.strokeStyle = alpha(C.slate, 0.55);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = offsetX; x < r.viewWidth; x += cell) {
-      ctx.moveTo(Math.round(x) + 0.5, 0);
-      ctx.lineTo(Math.round(x) + 0.5, r.viewHeight);
-    }
-    for (let y = offsetY; y < r.viewHeight; y += cell) {
-      ctx.moveTo(0, Math.round(y) + 0.5);
-      ctx.lineTo(r.viewWidth, Math.round(y) + 0.5);
-    }
-    ctx.stroke();
-  }
-
-  private renderObstacles(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = C.slate;
-    ctx.strokeStyle = C.mist;
-    ctx.lineWidth = 2;
-    for (const ob of this.world.obstacles) {
-      ctx.beginPath();
-      if (ob.kind === 'rect') ctx.rect(ob.x, ob.y, ob.w, ob.h);
-      else ctx.arc(ob.x, ob.y, ob.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-  }
-
   private renderDebug(ctx: CanvasRenderingContext2D, r: Renderer): void {
     const { stats } = this.game;
-    ctx.font = bodyFont(12);
+    ctx.font = bodyFont(11);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = alpha(C.haze, 0.85);
+    ctx.fillStyle = alpha(C.haze, 0.7);
     ctx.fillText(
-      `${stats.fps} fps  ${stats.frameMs.toFixed(1)}ms  ${this.world.entities.length} ent  ` +
-      `${r.viewWidth}x${r.viewHeight}`,
+      `${stats.fps}fps ${stats.frameMs.toFixed(1)}ms · ${this.world.entities.length}e ` +
+      `${this.world.props.length}p · ${this.area.def.id}`,
       r.safeLeft + 10,
       r.safeTop + 8,
     );

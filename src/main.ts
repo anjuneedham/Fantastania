@@ -1,3 +1,4 @@
+import { AREAS } from './data/areas';
 import { MUSIC, SOUNDS } from './data/sounds';
 import { Game } from './engine/Game';
 import { state } from './game/GameState';
@@ -51,7 +52,7 @@ async function main(): Promise<void> {
   await bootComplete();
 
   // Exposed for debugging in the browser console; harmless in production.
-  (window as unknown as { fantastania?: unknown }).fantastania = { game, state };
+  (window as unknown as { fantastania?: unknown }).fantastania = { game, state, areas: AREAS };
 }
 
 main().catch(bootError);

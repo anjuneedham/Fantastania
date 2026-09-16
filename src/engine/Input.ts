@@ -38,6 +38,10 @@ export class Input {
   mouseDown = false;
   mouseJustDown = false;
   wheelDelta = 0;
+  /** True once the mouse has actually moved; before that its position is a lie. */
+  mouseEverMoved = false;
+  /** performance.now() of the last mouse movement. */
+  lastMouseMove = -Infinity;
 
   constructor(
     private readonly target: HTMLElement,
@@ -93,6 +97,11 @@ export class Input {
     const onPointerMove = (e: PointerEvent) => {
       this.toView(e.clientX, e.clientY, this.scratch);
       if (e.pointerType === 'mouse') {
+        // Ignore sub-pixel jitter so a resting mouse does not read as aiming.
+        if (Math.abs(this.scratch.x - this.mouseX) + Math.abs(this.scratch.y - this.mouseY) > 1.5) {
+          this.mouseEverMoved = true;
+          this.lastMouseMove = performance.now();
+        }
         this.mouseX = this.scratch.x;
         this.mouseY = this.scratch.y;
       }

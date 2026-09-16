@@ -1,3 +1,4 @@
+import { PROPS, drawProp, type PropType } from '../art/environment';
 import { FloatingTextSystem, ParticleSystem, type ParticleKind } from '../art/fx';
 import { C } from '../art/palette';
 import type { AudioBus } from '../engine/AudioBus';
@@ -31,6 +32,24 @@ export interface CircleObstacle {
 
 export type Obstacle = RectObstacle | CircleObstacle;
 
+/**
+ * A placed piece of scenery. Props never move and never update, so they live
+ * outside the entity list: they are pre-sorted by depth once at area load and
+ * merged into the render order each frame, which keeps a 300-tree forest at
+ * zero simulation cost.
+ */
+export interface PropInstance {
+  type: PropType;
+  variant: number;
+  x: number;
+  y: number;
+  scale: number;
+  /** True when the prop emits light and needs the live glow pass. */
+  glow: boolean;
+  /** True for decals that always draw beneath actors. */
+  flat: boolean;
+}
+
 export interface WorldServices {
   audio: AudioBus;
   camera: Camera;
@@ -40,6 +59,10 @@ export class World implements WorldLike {
   entities: Entity[] = [];
   actors: Actor[] = [];
   obstacles: Obstacle[] = [];
+  /** Sorted by y at load time; never re-sorted. */
+  props: PropInstance[] = [];
+  /** Subset of `props` that emits light. */
+  glowProps: PropInstance[] = [];
   bounds = { x: 0, y: 0, w: 2400, h: 1600 };
 
   readonly particles = new ParticleSystem();
@@ -60,6 +83,8 @@ export class World implements WorldLike {
     this.entities.length = 0;
     this.actors.length = 0;
     this.obstacles.length = 0;
+    this.props.length = 0;
+    this.glowProps.length = 0;
     this.pendingSpawns.length = 0;
     this.particles.clear();
     this.texts.clear();
@@ -351,10 +376,31 @@ export class World implements WorldLike {
     this.services.audio.sfx(id, volume);
   }
 
-  /** Draw order: ground decals, then actors sorted by feet position. */
+  /** Draw order: flat decals, then props and actors merged by feet position. */
   private readonly renderList: Entity[] = [];
 
-  render(ctx: CanvasRenderingContext2D, quality: 'high' | 'low'): void {
+  /**
+   * Renders the populated world. Props and entities are both depth-sorted, so
+   * they are merged rather than concatenated-and-re-sorted: props are already
+   * in order from load time and entities are a short list.
+   */
+  render(
+    ctx: CanvasRenderingContext2D,
+    quality: 'high' | 'low',
+    view: { x: number; y: number; w: number; h: number },
+  ): void {
+    const left = view.x;
+    const right = view.x + view.w;
+    const top = view.y;
+    const bottom = view.y + view.h;
+
+    // Flat decals first: they belong to the ground, not the depth order.
+    for (const p of this.props) {
+      if (!p.flat) continue;
+      if (p.x < left - 80 || p.x > right + 80 || p.y < top - 80 || p.y > bottom + 80) continue;
+      drawPropInstance(ctx, p);
+    }
+
     this.renderList.length = 0;
     for (const e of this.entities) {
       if (e.renderGround) e.renderGround(ctx, quality);
@@ -363,10 +409,37 @@ export class World implements WorldLike {
     this.renderList.sort(byDepth);
 
     this.particles.render(ctx, quality);
-    for (const e of this.renderList) e.render(ctx, quality);
+
+    // Merge the two sorted streams.
+    let pi = 0;
+    let ei = 0;
+    const props = this.props;
+    while (pi < props.length || ei < this.renderList.length) {
+      const p = props[pi];
+      const e = this.renderList[ei];
+      if (p !== undefined && (e === undefined || p.y <= e.depth)) {
+        pi++;
+        if (p.flat) continue;
+        const spec = PROPS[p.type];
+        const halfW = spec.w * p.scale;
+        const h = spec.h * p.scale;
+        if (p.x + halfW < left || p.x - halfW > right || p.y < top - h || p.y > bottom + h) {
+          continue;
+        }
+        drawPropInstance(ctx, p);
+      } else if (e !== undefined) {
+        ei++;
+        e.render(ctx, quality);
+      }
+    }
+
     for (const e of this.renderList) e.renderOverlay?.(ctx, quality);
     this.texts.render(ctx);
   }
+}
+
+function drawPropInstance(ctx: CanvasRenderingContext2D, p: PropInstance): void {
+  drawProp(ctx, p.type, p.variant, p.x, p.y, p.scale);
 }
 
 function byDepth(a: Entity, b: Entity): number {
