@@ -17,16 +17,31 @@ export interface AreaRect {
   h: number;
 }
 
-/** Conditions gating a portal, chest or spawn. All present conditions must pass. */
+/**
+ * Conditions gating a portal, chest, NPC, dialogue node or choice. Every
+ * present condition must pass. One shared shape means a locked door, a hidden
+ * dialogue option and a conditional NPC all behave identically.
+ */
 export interface Requirement {
   level?: number;
   /** Story flag that must be truthy. */
   flag?: string;
+  /** Story flag that must be falsy. */
+  notFlag?: string;
   /** Item that must be in the inventory (not consumed unless `consumeItem`). */
   itemId?: string;
+  itemCount?: number;
   consumeItem?: boolean;
   /** Quest that must be turned in. */
   questCompleted?: string;
+  /** Quest that must be accepted and not yet turned in. */
+  questActive?: string;
+  /** Quest whose objectives are all met but which has not been turned in. */
+  questReady?: string;
+  /** Quest that must NOT have been accepted or completed. */
+  questNotStarted?: string;
+  /** Minimum gold. */
+  gold?: number;
   /** Message shown when the requirement is not met. */
   deniedMessage?: string;
 }

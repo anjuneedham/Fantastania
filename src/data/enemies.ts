@@ -95,6 +95,15 @@ export interface EnemyDef {
   abilities?: EnemyAbilityUse[];
   ai: AiProfile;
   sprite: ActorSprite;
+  /**
+   * Optional sprite-sheet id (see data/spriteSheets.ts). When present and the
+   * sheet has finished loading, Enemy draws frames from it instead of the
+   * procedural `sprite`; `sprite` is always required regardless, since it is
+   * the guaranteed fallback while the image loads (or if it fails to).
+   */
+  spriteSheetId?: string;
+  /** Uniform scale applied to sprite-sheet frames, independent of the grid's pixel size. */
+  spriteSheetScale?: number;
 
   /** Spawns smaller copies on death. */
   splitsInto?: { enemyId: string; count: number; levelDelta: number };
@@ -452,6 +461,8 @@ export const ENEMIES: Record<string, EnemyDef> = {
       aura: { color: C.violet, radius: 56, intensity: 0.5 },
       weapon: { kind: 'staff', length: 0.6, color: '#2f2545', glow: C.violet },
     },
+    spriteSheetId: 'corruptedMage',
+    spriteSheetScale: 1.05,
     sfx: { alert: 'enemy_alert', die: 'enemy_die' },
   },
 

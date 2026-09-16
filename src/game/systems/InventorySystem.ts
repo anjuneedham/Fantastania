@@ -64,15 +64,21 @@ export function addItem(itemId: string, count = 1, announce = true): AddResult {
   }
 
   const added = count - remaining;
-  if (added > 0 && announce) {
+  if (added > 0) {
+    // itemGained always fires: quest collect-objectives and anything else that
+    // tracks inventory truth depend on it. `announce` only controls whether a
+    // toast appears — silencing the toast (e.g. a displaced weapon quietly
+    // returning to the pack on re-equip) must never also silence the event.
     bus.emit('itemGained', { itemId, count: added, rarity: def.rarity });
-    bus.emit('toast', {
-      text: added > 1 ? `${def.name} ×${added}` : def.name,
-      color: RARITY_COLORS[def.rarity],
-      icon: def.icon,
-    });
+    if (announce) {
+      bus.emit('toast', {
+        text: added > 1 ? `${def.name} ×${added}` : def.name,
+        color: RARITY_COLORS[def.rarity],
+        icon: def.icon,
+      });
+    }
   }
-  if (remaining > 0) {
+  if (remaining > 0 && announce) {
     bus.emit('toast', { text: 'Your pack is full.', color: C.blood, icon: '⚠' });
   }
   return { added, overflow: remaining };

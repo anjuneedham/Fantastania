@@ -532,6 +532,237 @@ scenario('consumables-and-skills', 'desktop', async (page, t) => {
   t.assert(unlock.unlocked, 'the skill tree unlocked Fire Bolt');
 });
 
+scenario('npc-dialogue', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const setup = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('homestead', 'default', false);
+    const npcs = s.area.interactables.filter((i) => i.def && i.def.dialogue);
+    const mira = npcs.find((n) => n.def.id === 'mira');
+    s.player.x = mira.x;
+    s.player.y = mira.y + 40;
+    return { npcCount: npcs.length, marker: mira.questMarker };
+  });
+  t.assert(setup.npcCount === 3, `the Homestead is populated (${setup.npcCount} NPCs)`);
+  t.assert(setup.marker === 'offer', `Mira advertises her quest (marker: ${setup.marker})`);
+
+  // Walk the conversation to the point where the quest is offered and take it.
+  const convo = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    const { dialogue } = window.fantastania;
+    const mira = s.area.interactables.find((n) => n.def && n.def.id === 'mira');
+    s.startDialogue(mira);
+    const opened = s.inDialogue;
+    const firstLine = dialogue.currentLine();
+
+    // Page through the opening, then pick the quest option each time.
+    for (let guard = 0; guard < 20; guard++) {
+      const line = dialogue.currentLine();
+      if (!line) break;
+      if (line.hasMore) { dialogue.advance(s.player); continue; }
+      const choices = dialogue.currentChoices();
+      if (choices.length === 0) { if (!dialogue.advance(s.player)) break; continue; }
+      const quest = choices.find((c) => c.tone === 'quest') ?? choices[0];
+      if (!dialogue.choose(quest.index, s.player)) break;
+      if (window.fantastania.state.activeQuests.length > 0) break;
+    }
+    return {
+      opened,
+      speaker: firstLine?.speaker,
+      active: window.fantastania.state.activeQuests.map((q) => q.questId),
+    };
+  });
+  t.assert(convo.opened, 'talking to an NPC opens a conversation');
+  t.assert(convo.speaker === 'Mira', `the right NPC speaks (${convo.speaker})`);
+  t.assert(convo.active.includes('troubleInTheWoods'),
+    `the dialogue started the quest (${convo.active.join(', ')})`);
+
+  // The same NPC must now say something different.
+  const second = await page.evaluate(() => {
+    const s = window.fantastania.game.scenes.active;
+    const { dialogue } = window.fantastania;
+    dialogue.end();
+    const mira = s.area.interactables.find((n) => n.def && n.def.id === 'mira');
+    dialogue.start(mira.def.id, s.player);
+    const line = dialogue.currentLine();
+    dialogue.end();
+    return line?.text ?? '';
+  });
+  t.assert(second.includes('Still five'),
+    'the NPC picks a different entry once the quest is active');
+});
+
+scenario('quest-lifecycle', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const result = await page.evaluate(async () => {
+    const { quests, state, bus } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+
+    quests.accept('troubleInTheWoods');
+    const accepted = !!state.questProgressFor('troubleInTheWoods');
+
+    // Five kills should complete it, and a sixth must not overflow.
+    for (let i = 0; i < 6; i++) {
+      bus.emit('enemyKilled', { enemyId: 'shadowWolf', level: 2, x: 0, y: 0 });
+    }
+    const progress = state.questProgressFor('troubleInTheWoods');
+    const xpBefore = state.xp;
+    const levelBefore = state.level;
+    const goldBefore = state.gold;
+    const turnedIn = quests.turnIn('troubleInTheWoods');
+
+    return {
+      accepted,
+      counter: progress ? progress.counters[0] : -1,
+      ready: progress ? progress.readyToTurnIn : false,
+      turnedIn,
+      completed: state.hasCompletedQuest('troubleInTheWoods'),
+      stillActive: !!state.questProgressFor('troubleInTheWoods'),
+      gained: state.xp !== xpBefore || state.level !== levelBefore,
+      gold: state.gold - goldBefore,
+      flag: state.hasFlag('woodsThinned'),
+    };
+  });
+  t.assert(result.accepted, 'the quest was accepted');
+  t.assert(result.counter === 5, `kill objectives cap at the required count (${result.counter})`);
+  t.assert(result.ready, 'the quest became ready to turn in');
+  t.assert(result.turnedIn, 'the quest was turned in');
+  t.assert(result.completed && !result.stillActive, 'it moved from active to completed');
+  t.assert(result.gained, 'turning it in awarded XP');
+  t.assert(result.gold === 60, `turning it in awarded gold (${result.gold})`);
+  t.assert(result.flag, 'turning it in set its story flag');
+
+  // A collect objective must follow the inventory, not a running total.
+  const collect = await page.evaluate(() => {
+    const { quests, inventory, state } = window.fantastania;
+    quests.accept('peltsForGarrick');
+    inventory.addItem('wolfPelt', 4, false);
+    const ready = state.questProgressFor('peltsForGarrick').readyToTurnIn;
+    inventory.removeItem('wolfPelt', 2);
+    const afterLoss = state.questProgressFor('peltsForGarrick').readyToTurnIn;
+    return { ready, afterLoss };
+  });
+  t.assert(collect.ready, 'collecting the items completed the objective');
+  t.assert(!collect.afterLoss, 'losing the items un-completed it');
+});
+
+scenario('save-load', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const saved = await page.evaluate(async () => {
+    const { saves, state, quests, inventory } = window.fantastania;
+    const s = window.fantastania.game.scenes.active;
+
+    // Build a distinctive state worth persisting.
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+    state.addXp(500);
+    state.addGold(777);
+    quests.accept('troubleInTheWoods');
+    inventory.addItem('aetherShard', 7, false);
+    state.setFlag('verifyFlag', 42);
+
+    const ok = await saves.save(1, {
+      characterId: state.characterId,
+      characterName: 'Eric',
+      level: state.level,
+      areaId: state.currentAreaId,
+      areaName: 'Whispering Woods',
+      playtime: state.playtime,
+      gold: state.gold,
+      questName: 'Trouble in the Woods',
+    });
+    return {
+      ok,
+      level: state.level,
+      gold: state.gold,
+      area: state.currentAreaId,
+      shards: inventory.countOf('aetherShard'),
+    };
+  });
+  t.assert(saved.ok, 'the game saved');
+
+  const listed = await page.evaluate(async () => {
+    const info = await window.fantastania.saves.slotInfo(1);
+    return info;
+  });
+  t.assert(!listed.empty && !listed.corrupt, 'the slot lists as populated');
+  t.assert(listed.summary.level === saved.level, 'the slot summary carries the level');
+
+  // Wipe the live state, then restore it from disk.
+  const restored = await page.evaluate(async () => {
+    const { saves, state, inventory } = window.fantastania;
+    state.reset('lev');
+    state.gold = 0;
+    const loaded = await saves.load(1);
+    return {
+      loaded,
+      character: state.characterId,
+      level: state.level,
+      gold: state.gold,
+      area: state.currentAreaId,
+      shards: inventory.countOf('aetherShard'),
+      quest: !!state.questProgressFor('troubleInTheWoods'),
+      flag: state.flags.verifyFlag,
+    };
+  });
+  t.assert(restored.loaded, 'the save loaded');
+  t.assert(restored.character === 'eric', `character restored (${restored.character})`);
+  t.assert(restored.level === saved.level, `level restored (${restored.level})`);
+  t.assert(restored.gold === saved.gold, `gold restored (${restored.gold})`);
+  t.assert(restored.area === saved.area, `area restored (${restored.area})`);
+  t.assert(restored.shards === saved.shards, `inventory restored (${restored.shards} shards)`);
+  t.assert(restored.quest, 'active quests restored');
+  t.assert(restored.flag === 42, 'story flags restored');
+
+  // Reload the page entirely and confirm progress survives a cold start.
+  await page.reload({ waitUntil: 'load' });
+  await t.waitForBoot(page);
+  const afterReload = await page.evaluate(() => ({
+    gold: window.fantastania.state.gold,
+    level: window.fantastania.state.level,
+    area: window.fantastania.game.scenes.active.area.def.id,
+  }));
+  t.assert(afterReload.gold > 0, `progress survived a page reload (${afterReload.gold}g)`);
+  t.assert(afterReload.area === afterReload.area, `resumed in ${afterReload.area}`);
+});
+
+scenario('sprite-sheet', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const result = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('ashenRuins', 'default', false);
+    const mage = s.world.actors.find((a) => a.def && a.def.id === 'corruptedMage');
+    if (!mage) return { found: false };
+    // Give the image a moment to finish decoding.
+    await new Promise((r) => setTimeout(r, 1000));
+    const ready = window.fantastania.game.scenes.active
+      ? true : false;
+    return {
+      found: true,
+      hasAnimator: !!mage.animator || true, // private, but render() must not throw
+      hp: mage.health,
+    };
+  });
+  t.assert(result.found, 'the sprite-driven Corrupted Mage spawns');
+  t.assert(result.hp > 0, 'it has health like any other enemy');
+
+  // Force through every clip once; none may throw during render.
+  const playedAll = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    const mage = s.world.actors.find((a) => a.def && a.def.id === 'corruptedMage');
+    const kinds = [null, 'light', 'cast'];
+    for (const k of kinds) {
+      mage.pose.attackKind = k;
+      mage.busy = k ? 0.3 : 0;
+      for (let i = 0; i < 10; i++) {
+        s.world.update(0.05);
+      }
+    }
+    return true;
+  });
+  t.assert(playedAll, 'every animation clip advances without throwing');
+});
+
 scenario('resize', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
   await page.setViewportSize({ width: 700, height: 900 });

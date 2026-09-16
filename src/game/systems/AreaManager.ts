@@ -9,6 +9,7 @@ import { tryGetItem } from '../../data/items';
 import { Chest } from '../entities/Chest';
 import { Enemy } from '../entities/Enemy';
 import type { Interactable } from '../entities/Interactable';
+import { Npc } from '../entities/Npc';
 import { Portal } from '../entities/Portal';
 import { state } from '../GameState';
 import type { PropInstance, World } from '../World';
@@ -61,6 +62,13 @@ export function loadArea(world: World, areaId: string): LoadedArea {
     const chest = new Chest(placement);
     world.addNow(chest);
     interactables.push(chest);
+  }
+  for (const placement of def.npcs ?? []) {
+    // A conditional NPC simply is not there until their requirement passes.
+    if (!checkRequirement(placement.requires).ok) continue;
+    const npc = new Npc(placement);
+    world.addNow(npc);
+    interactables.push(npc);
   }
 
   // Props are static: sort once here so the renderer can merge instead of sort.
@@ -261,16 +269,42 @@ export function checkRequirement(req: Requirement | undefined): RequirementResul
   if (req.flag !== undefined && !state.hasFlag(req.flag)) {
     return { ok: false, reason: req.deniedMessage ?? 'Something is still missing here.' };
   }
+  if (req.notFlag !== undefined && state.hasFlag(req.notFlag)) {
+    return { ok: false, reason: req.deniedMessage ?? 'That moment has passed.' };
+  }
   if (req.questCompleted !== undefined && !state.hasCompletedQuest(req.questCompleted)) {
     return { ok: false, reason: req.deniedMessage ?? 'There is unfinished business first.' };
   }
+  if (req.questActive !== undefined) {
+    const active = state.questProgressFor(req.questActive);
+    if (!active) return { ok: false, reason: req.deniedMessage ?? 'Not yet.' };
+  }
+  if (req.questReady !== undefined) {
+    const progress = state.questProgressFor(req.questReady);
+    if (!progress?.readyToTurnIn) {
+      return { ok: false, reason: req.deniedMessage ?? 'That is not done yet.' };
+    }
+  }
+  if (req.questNotStarted !== undefined) {
+    const started = state.questProgressFor(req.questNotStarted)
+      || state.hasCompletedQuest(req.questNotStarted);
+    if (started) return { ok: false, reason: req.deniedMessage ?? 'Already underway.' };
+  }
+  if (req.gold !== undefined && state.gold < req.gold) {
+    return { ok: false, reason: req.deniedMessage ?? `Requires ${req.gold} gold.` };
+  }
   if (req.itemId !== undefined) {
-    const stack = state.inventory.find((s) => s.itemId === req.itemId);
-    if (!stack || stack.count <= 0) {
+    const needed = req.itemCount ?? 1;
+    let held = 0;
+    for (const stack of state.inventory) {
+      if (stack.itemId === req.itemId) held += stack.count;
+    }
+    if (held < needed) {
       const item = tryGetItem(req.itemId);
       return {
         ok: false,
-        reason: req.deniedMessage ?? `You need ${item?.name ?? 'something'} for this.`,
+        reason: req.deniedMessage
+          ?? `You need ${needed > 1 ? `${needed} ` : ''}${item?.name ?? 'something'} for this.`,
       };
     }
   }

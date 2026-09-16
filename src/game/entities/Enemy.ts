@@ -4,6 +4,8 @@ import { clamp, clamp01, dist2, inCone } from '../../engine/math';
 import { fx } from '../../engine/Rng';
 import { ENEMIES, enemyStatsAt, type EnemyAbilityUse, type EnemyDef } from '../../data/enemies';
 import { getAbility } from '../../data/abilities';
+import { trySpriteSheet } from '../../data/spriteSheets';
+import { isSheetReady, preloadSheet, SpriteAnimator, type SpriteSheetDef } from '../../engine/SpriteSheet';
 import { bus } from '../events';
 import { mitigate } from '../progression';
 import type { DamageEvent, StatKey } from '../types';
@@ -59,6 +61,12 @@ export class Enemy extends Actor {
   /** Set by the boss encounter so the arena can react to the fight starting. */
   onPhaseChange: ((phase: string, line?: string) => void) | null = null;
 
+  /** Present only when the enemy's definition names a registered sheet. */
+  private readonly spriteSheet: SpriteSheetDef | undefined;
+  private readonly animator: SpriteAnimator | null;
+  /** Seconds left where a hit-reaction clip takes priority over other states. */
+  private hurtClipTimer = 0;
+
   constructor(enemyId: string, level: number, elite = false, spawnId = '') {
     super();
     const def = ENEMIES[enemyId];
@@ -86,6 +94,14 @@ export class Enemy extends Actor {
       ? { ...def.sprite, height: def.sprite.height * 1.18, accent: C.gold,
           aura: { color: C.gold, radius: def.sprite.height * 1.5, intensity: 0.5 } }
       : { ...def.sprite };
+
+    // Elites and split-spawns keep the procedural look: the sheet has one
+    // fixed size and palette, and re-deriving a gold-rimmed variant from raw
+    // pixels is not something a frame grid can do the way the ActorSprite
+    // tint pipeline already does. A named sheet only drives the base form.
+    this.spriteSheet = !elite ? trySpriteSheet(def.spriteSheetId) : undefined;
+    this.animator = this.spriteSheet ? new SpriteAnimator() : null;
+    if (this.spriteSheet) preloadSheet(this.spriteSheet);
   }
 
   get isBoss(): boolean {
@@ -137,6 +153,7 @@ export class Enemy extends Actor {
 
   update(dt: number, world: WorldLike): void {
     this.tickCommon(dt, world);
+    this.updateSpriteAnimation(dt);
     if (this.isDead) return;
 
     this.stateTime += dt;
@@ -507,6 +524,90 @@ export class Enemy extends Actor {
     super.onDamaged(event);
     // Being hit from out of nowhere pulls aggro even past the detect radius.
     if (!this.target && event.sourceId >= 0) this.setState('alert');
+    // A brief window where the hurt clip wins over idle/walk, but never over
+    // an attack or cast already in flight — getting flinch-cancelled out of a
+    // telegraphed swing by a chip hit would make attacks unreadable.
+    if (this.busy <= 0) this.hurtClipTimer = 0.3;
+  }
+
+  /**
+   * Picks and advances the sheet clip that matches the current AI/pose state.
+   * Runs every frame regardless of sprite-sheet presence — the state machine
+   * itself is the single source of truth for "what is this enemy doing", and
+   * this is just one more reader of it, the same as the procedural renderer.
+   */
+  private updateSpriteAnimation(dt: number): void {
+    this.hurtClipTimer = Math.max(0, this.hurtClipTimer - dt);
+    if (!this.animator || !this.spriteSheet) return;
+
+    let clip: string;
+    if (this.isDead) {
+      clip = 'death';
+    } else if (this.pose.attackKind === 'cast') {
+      clip = 'cast';
+    } else if (this.pose.attackKind === 'light' || this.pose.attackKind === 'heavy') {
+      clip = 'attack';
+    } else if (this.hurtClipTimer > 0) {
+      clip = 'hurt';
+    } else if (this.pose.moveSpeed01 > 0.05) {
+      clip = 'walk';
+    } else {
+      clip = 'idle';
+    }
+
+    // A one-shot clip (attack/cast/hurt) plays to completion once started,
+    // even if the underlying state flips back to idle a frame early — cutting
+    // a swing off mid-animation reads as a glitch, not as responsiveness.
+    const current = this.spriteSheet.clips[this.animator.clipName];
+    if (current && !current.loop && !this.animator.finished && this.animator.clipName !== clip) {
+      clip = this.animator.clipName;
+    }
+
+    this.animator.play(clip);
+    this.animator.update(dt, this.spriteSheet);
+  }
+
+  override render(ctx: CanvasRenderingContext2D, quality: 'high' | 'low'): void {
+    if (this.spriteSheet && this.animator && isSheetReady(this.spriteSheet)) {
+      // Scale the sheet's fixed pixel grid to this enemy's design height, so a
+      // sprite-driven enemy still composes correctly with elites, health bars
+      // and everything else keyed off `sprite.height`.
+      const scale = (this.sprite.height / 92) * (this.def.spriteSheetScale ?? 1);
+      const flip = Math.cos(this.pose.facing) < 0;
+
+      // The procedural renderer draws a ground-contact shadow for every actor
+      // (see drawActor); a sprite frame carries no shadow of its own, so
+      // without one a sprite-driven enemy visibly floats above the ground.
+      const shadowFade = 1 - this.pose.death * 0.7;
+      ctx.globalAlpha = 0.34 * shadowFade;
+      ctx.fillStyle = C.void;
+      ctx.beginPath();
+      ctx.ellipse(this.x, this.y, this.radius * 1.7 * shadowFade, this.radius * 0.7 * shadowFade, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      const drawn = this.animator.render(ctx, this.spriteSheet, this.x, this.y, scale, flip);
+      if (drawn) {
+        if (this.shieldPoints > 0 && !this.isDead) this.renderShieldRing(ctx);
+        return;
+      }
+    }
+    // Fallback: sheet still loading, failed to load, or this is an elite —
+    // the procedural renderer always works, so nothing is ever left blank.
+    super.render(ctx, quality);
+  }
+
+  private renderShieldRing(ctx: CanvasRenderingContext2D): void {
+    const r = this.radius * 2.1;
+    const t = this.pose.animTime;
+    ctx.save();
+    ctx.translate(this.x, this.y - this.sprite.height * 0.5);
+    ctx.strokeStyle = `rgba(95,230,208,${0.35 + Math.sin(t * 4) * 0.12})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, r * 1.15, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   /** Health bar and nameplate. Only shown once the enemy matters to the player. */

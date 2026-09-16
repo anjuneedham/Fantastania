@@ -7,3 +7,9 @@ android/app/build/
 android/build/
 android/.gradle/
 android/local.properties
+.verify/
+tools/shot*.mjs
+# Reference/source assets not yet cleared for the game's license — see
+# assets-source/README.md. Never commit third-party art here until its
+# license is confirmed compatible with how the game will be distributed.
+assets-source/

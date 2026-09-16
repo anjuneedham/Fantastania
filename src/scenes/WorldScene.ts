@@ -6,6 +6,7 @@ import { state } from '../game/GameState';
 import { bus } from '../game/events';
 import { Enemy } from '../game/entities/Enemy';
 import type { Interactable } from '../game/entities/Interactable';
+import { Npc } from '../game/entities/Npc';
 import { Pickup } from '../game/entities/Pickup';
 import { Player } from '../game/entities/Player';
 import type { Portal } from '../game/entities/Portal';
@@ -14,7 +15,13 @@ import {
 } from '../game/systems/AreaManager';
 import { CombatSystem } from '../game/systems/CombatSystem';
 import { rollLoot } from '../game/systems/InventorySystem';
+import { buildSummary } from '../game/systems/SaveSystem';
+import { trySaves } from '../game/saves';
+import { QUESTS } from '../data/quests';
 import { RewardSystem } from '../game/systems/RewardSystem';
+import { dialogue } from '../game/systems/DialogueSystem';
+import { quests } from '../game/systems/QuestSystem';
+import { DialogueView } from '../ui/dialogueView';
 import { getEnemy } from '../data/enemies';
 import { Rng } from '../engine/Rng';
 import { World } from '../game/World';
@@ -36,6 +43,11 @@ import { toasts } from '../ui/toasts';
  */
 const WORLD_ZOOM = 1.25;
 
+/** Quest name lookup that tolerates an id the data no longer defines. */
+function tryQuestName(questId: string): string | null {
+  return QUESTS[questId]?.name ?? null;
+}
+
 export class WorldScene extends Scene {
   world!: World;
   renderer = new WorldRenderer();
@@ -43,6 +55,9 @@ export class WorldScene extends Scene {
   area!: LoadedArea;
   combat!: CombatSystem;
   readonly rewards = new RewardSystem();
+  readonly dialogueView = new DialogueView();
+  /** Set while a conversation is on screen; gameplay input is suspended. */
+  inDialogue = false;
 
   /** Blocks portal re-entry immediately after arriving. */
   private portalGrace = 0;
@@ -60,6 +75,7 @@ export class WorldScene extends Scene {
     this.combat = new CombatSystem(this.world, this.player);
     toasts.attach();
     this.rewards.attach();
+    quests.attach();
     this.rewards.onLoot = (enemyId, level, x, y) => this.dropLoot(enemyId, level, x, y);
     this.unsubscribes.push(
       bus.on('enemyKilled', () => this.markSpawnCleared()),
@@ -81,6 +97,8 @@ export class WorldScene extends Scene {
   override exit(): void {
     toasts.detach();
     this.rewards.detach();
+    quests.detach();
+    dialogue.end();
     for (const off of this.unsubscribes) off();
     this.unsubscribes.length = 0;
   }
@@ -133,8 +151,45 @@ export class WorldScene extends Scene {
     this.game.controls.pad.setVisible('interact', best !== null);
 
     if (best && !player.isDead && this.game.controls.pressed('interact')) {
-      best.interact(this.world, player);
+      const handled = best.interact(this.world, player);
+      // NPCs signal "open a conversation" by returning true from interact;
+      // the scene owns the UI, so it starts the dialogue here.
+      if (handled && best instanceof Npc) this.startDialogue(best);
     }
+  }
+
+  private startDialogue(npc: Npc): void {
+    if (!dialogue.start(npc.def.id, this.player)) return;
+    this.inDialogue = true;
+    this.dialogueView.reset();
+    this.game.controls.gameplayEnabled = false;
+    this.game.controls.pad.releaseAll();
+    this.world.sfx('ui_open');
+  }
+
+  private updateDialogue(dt: number): void {
+    const stillOpen = this.dialogueView.update(
+      dt, dialogue, this.game.controls, this.game.renderer, this.player,
+    );
+    if (stillOpen) return;
+
+    this.inDialogue = false;
+    dialogue.end();
+    this.game.controls.gameplayEnabled = true;
+    // Autosave on leaving a conversation: quests and story flags have very
+    // likely just changed, and this is the natural checkpoint for them.
+    void this.autosave();
+  }
+
+  /** Writes the autosave slot. Failures are logged, never fatal. */
+  async autosave(): Promise<void> {
+    const save = trySaves();
+    if (!save) return;
+    const tracked = state.activeQuests[0];
+    const questName = tracked ? tryQuestName(tracked.questId) : null;
+    await save.autosave(
+      buildSummary(this.player.def.name, this.area.def.name, questName),
+    );
   }
 
   /** Loads an area and places the player at one of its spawn points. */
@@ -183,12 +238,24 @@ export class WorldScene extends Scene {
       game.scenes.fadeIn(0.45);
       this.transitioning = false;
     }
+
+    // Crossing an area boundary is a natural checkpoint.
+    void this.autosave();
   }
 
   override update(dt: number): void {
     if (this.transitioning) return;
     const { game } = this;
     const controls = game.controls;
+
+    if (this.inDialogue) {
+      this.updateDialogue(dt);
+      // The world still animates behind the panel, but nothing simulates: an
+      // enemy must not be able to kill the player mid-conversation.
+      this.renderer.update(dt, this.world, game.camera, game.renderer);
+      toasts.update(dt);
+      return;
+    }
 
     // Hit-stop: the world freezes for a few frames on a solid connect, while
     // UI and effects keep running on the real delta.
@@ -419,11 +486,12 @@ export class WorldScene extends Scene {
     ctx.restore();
 
     this.renderer.renderLighting(ctx, r);
+    if (this.inDialogue) this.dialogueView.render(ctx, dialogue, r);
     toasts.render(ctx, r);
     this.renderDebug(ctx, r);
     ctx.restore();
 
-    renderPad(ctx, this.game.controls.pad, r);
+    if (!this.inDialogue) renderPad(ctx, this.game.controls.pad, r);
   }
 
   private renderDebug(ctx: CanvasRenderingContext2D, r: Renderer): void {
