@@ -49,6 +49,8 @@ export interface WorldLike {
   readonly time: number;
   entities: Entity[];
   actors: Actor[];
+  /** The current area's playable rectangle. See `World.clampToBounds`. */
+  readonly bounds: { x: number; y: number; w: number; h: number };
   /** Level geometry; projectiles and AI line-of-sight both consult it. */
   obstacles: ReadonlyArray<
     | { kind: 'rect'; x: number; y: number; w: number; h: number }

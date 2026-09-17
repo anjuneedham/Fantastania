@@ -186,7 +186,17 @@ export class World implements WorldLike {
       entity.y += dy;
       this.resolveAxis(entity, false);
     }
+    this.clampToBounds(entity);
+  }
 
+  /**
+   * Pins an entity's centre back inside `bounds`, minus its own radius so the
+   * whole body (not just its centre point) stays on the map. This is the
+   * single reusable place "can this entity's position ever be outside the
+   * world" gets answered — every path that can move an entity, in every
+   * area, calls this rather than each hand-rolling its own edge case.
+   */
+  private clampToBounds(entity: Entity): void {
     const b = this.bounds;
     const r = entity.radius;
     entity.x = clamp(entity.x, b.x + r, b.x + b.w - r);
@@ -234,7 +244,22 @@ export class World implements WorldLike {
     return true;
   }
 
-  /** Gentle mutual push so actors never occupy the same point. */
+  /**
+   * Gentle mutual push so actors never occupy the same point.
+   *
+   * This is the one place in the simulation that moves an actor without
+   * going through `moveWithCollision` — it writes `x`/`y` directly so a whole
+   * crowd can resolve against each other in one pass without each pair
+   * re-walking the other's obstacle list. That made it the one place a
+   * position could end up outside `bounds` and stay there: a player (or an
+   * enemy) pinned against a boundary wall by two or three others gets pushed
+   * straight through it, and since nothing else re-clamps a stationary
+   * actor, it can stand outside the map indefinitely — no "walking" required,
+   * which is what made this bug look like it had no reproduction steps.
+   * Clamping both actors of every pair right here, at the source, closes it
+   * for every actor and every area rather than papering over the player's
+   * case alone.
+   */
   private separateActors(): void {
     const list = this.actors;
     for (let i = 0; i < list.length; i++) {
@@ -257,6 +282,8 @@ export class World implements WorldLike {
         a.y -= ny * overlap * aWeight;
         b.x += nx * overlap * bWeight;
         b.y += ny * overlap * bWeight;
+        this.clampToBounds(a);
+        this.clampToBounds(b);
       }
     }
   }

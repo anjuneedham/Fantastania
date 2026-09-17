@@ -138,6 +138,130 @@ scenario('collision', 'desktop', async (page, t) => {
   t.assert(clear, 'no scatter prop was placed inside a wall');
 });
 
+/**
+ * Root cause: `World.separateActors()` (the mutual push that keeps a crowd
+ * from overlapping) writes actor positions directly and, unlike every other
+ * movement path, never re-clamped to `world.bounds` afterward. A player (or
+ * enemy) pinned against an edge by two or three others got shoved straight
+ * through it and could stand outside the map indefinitely — no walking
+ * required, which is what made it look unreproducible. This scenario
+ * reproduces it exactly: pack real enemies onto the player at each of the
+ * four map edges and confirm nobody's position ever leaves `bounds`.
+ */
+scenario('world-boundary-crowd-push', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const result = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('whisperingWoods', 'fromHomestead', false);
+    const b = s.world.bounds;
+    const r = s.player.radius;
+
+    const enemies = s.world.actors.filter((a) => a.faction === 'enemy' && a.solid);
+    if (enemies.length < 4) return { error: `not enough enemies (${enemies.length})` };
+
+    const edges = [
+      { x: b.x + r + 2, y: b.y + b.h / 2 }, // west
+      { x: b.x + b.w - r - 2, y: b.y + b.h / 2 }, // east
+      { x: b.x + b.w / 2, y: b.y + r + 2 }, // north
+      { x: b.x + b.w / 2, y: b.y + b.h - r - 2 }, // south
+    ];
+
+    const violations = [];
+    for (const edge of edges) {
+      s.player.x = edge.x;
+      s.player.y = edge.y;
+      s.player.vx = 0;
+      s.player.vy = 0;
+      // Stack several solid actors exactly on the player, hard against the
+      // boundary — the crowd separateActors() must resolve this same tick.
+      for (let i = 0; i < 4; i++) {
+        enemies[i].x = edge.x + (i - 2) * 3;
+        enemies[i].y = edge.y + (i - 2) * 3;
+        enemies[i].isDead = false;
+      }
+
+      // Run real ticks (not a single manual call) so this exercises the
+      // actual game loop, exactly as it runs during real play.
+      await new Promise((res) => setTimeout(res, 220));
+
+      const inBounds = (x, y, rad) =>
+        x >= b.x + rad - 0.5 && x <= b.x + b.w - rad + 0.5
+        && y >= b.y + rad - 0.5 && y <= b.y + b.h - rad + 0.5;
+
+      if (!inBounds(s.player.x, s.player.y, r)) {
+        violations.push(`player at (${s.player.x.toFixed(1)}, ${s.player.y.toFixed(1)})`);
+      }
+      for (const e of enemies.slice(0, 4)) {
+        if (!e.isDead && !inBounds(e.x, e.y, e.radius)) {
+          violations.push(`enemy ${e.def?.id ?? '?'} at (${e.x.toFixed(1)}, ${e.y.toFixed(1)})`);
+        }
+      }
+    }
+    return { violations, boundsChecked: edges.length };
+  });
+
+  t.assert(!result.error, result.error ?? 'enough enemies were available to stack');
+  t.assert((result.violations?.length ?? 1) === 0,
+    result.violations?.length
+      ? `crowd-pushed past the boundary: ${result.violations.join('; ')}`
+      : `no actor left the map at any of the ${result.boundsChecked} edges under a crowd push`);
+});
+
+/**
+ * Deliberate escape attempts at every corner of every area, holding two
+ * movement keys at once (the diagonal case) the whole time — the actual QA
+ * pass the bug report asked for, not just a unit-level check.
+ */
+scenario('world-boundary-corners', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const areaIds = Object.keys(await page.evaluate(() => window.fantastania.areas));
+
+  const escapes = [];
+  for (const areaId of areaIds) {
+    const bounds = await page.evaluate(async (id) => {
+      const s = window.fantastania.game.scenes.active;
+      await s.enterArea(id, 'default', false);
+      return s.world.bounds;
+    }, areaId);
+
+    const corners = [
+      ['KeyA', 'KeyW', bounds.x, bounds.y],
+      ['KeyD', 'KeyW', bounds.x + bounds.w, bounds.y],
+      ['KeyA', 'KeyS', bounds.x, bounds.y + bounds.h],
+      ['KeyD', 'KeyS', bounds.x + bounds.w, bounds.y + bounds.h],
+    ];
+
+    for (const [kx, ky] of corners) {
+      // Start well inside so this is a real walk into the corner, not a
+      // teleport followed by one clamp.
+      await page.evaluate((id) => {
+        const s = window.fantastania.game.scenes.active;
+        s.player.x = s.world.bounds.x + s.world.bounds.w / 2;
+        s.player.y = s.world.bounds.y + s.world.bounds.h / 2;
+      }, areaId);
+      await page.keyboard.down(kx);
+      await page.keyboard.down(ky);
+      await page.waitForTimeout(1500);
+      await page.keyboard.up(kx);
+      await page.keyboard.up(ky);
+
+      const pos = await page.evaluate(() => {
+        const s = window.fantastania.game.scenes.active;
+        return { x: s.player.x, y: s.player.y, r: s.player.radius };
+      });
+      const b = bounds;
+      const out = pos.x < b.x + pos.r - 0.5 || pos.x > b.x + b.w - pos.r + 0.5
+        || pos.y < b.y + pos.r - 0.5 || pos.y > b.y + b.h - pos.r + 0.5;
+      if (out) escapes.push(`${areaId} @ (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
+    }
+  }
+
+  t.assert(escapes.length === 0,
+    escapes.length
+      ? `escaped the map by walking diagonally into a corner: ${escapes.join('; ')}`
+      : `held a diagonal into all 4 corners of all ${areaIds.length} areas with no escape`);
+});
+
 scenario('area-population', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
   const info = await page.evaluate(() => {

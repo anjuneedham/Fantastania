@@ -508,8 +508,13 @@ export class Enemy extends Actor {
           this.spawnId,
         );
         const a = (i / split.count) * Math.PI * 2 + fx.angle();
-        child.x = this.x + Math.cos(a) * (this.radius + 8);
-        child.y = this.y + Math.sin(a) * (this.radius + 8);
+        // A slime that dies flush against the map edge must not hand its
+        // children a spawn point outside it — clamp before setHome, since the
+        // child's patrol home (and so its whole roaming range) is derived
+        // from this same point.
+        const b = world.bounds;
+        child.x = clamp(this.x + Math.cos(a) * (this.radius + 8), b.x + child.radius, b.x + b.w - child.radius);
+        child.y = clamp(this.y + Math.sin(a) * (this.radius + 8), b.y + child.radius, b.y + b.h - child.radius);
         child.setHome(child.x, child.y, 90);
         child.target = this.target;
         child.state = 'chase';
