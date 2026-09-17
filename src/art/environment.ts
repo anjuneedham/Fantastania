@@ -199,7 +199,8 @@ export type PropType =
   | 'pillar' | 'brokenPillar' | 'rubble' | 'archway'
   | 'cottage' | 'well' | 'fence' | 'brazier' | 'banner' | 'cart'
   | 'grave' | 'statue' | 'shrineStone' | 'obelisk'
-  | 'bones' | 'bloodStain';
+  | 'bones' | 'bloodStain'
+  | 'ancientTree' | 'signpost' | 'tentGoblin';
 
 export interface PropSpec {
   /** Drawn size in world units. */
@@ -244,6 +245,13 @@ export const PROPS: Record<PropType, PropSpec> = {
   obelisk: { w: 60, h: 180, collide: 22, glow: { color: C.violet, radius: 110, intensity: 0.7 } },
   bones: { w: 52, h: 26, collide: 0, flat: true },
   bloodStain: { w: 64, h: 34, collide: 0, flat: true },
+  // A single unmistakable tree, meant to be placed once or twice per forest as
+  // an actual landmark rather than scattered like pineTree/broadTree — the
+  // hollow's faint light is the tell that something in these woods answers
+  // back.
+  ancientTree: { w: 172, h: 224, collide: 34, glow: { color: C.aetherSoft, radius: 70, intensity: 0.35 } },
+  signpost: { w: 30, h: 56, collide: 6 },
+  tentGoblin: { w: 92, h: 72, collide: 24 },
 };
 
 interface CachedProp {
@@ -306,7 +314,7 @@ export function drawProp(
 
 /** Props whose emissive detail must draw over the bitmap, not under it. */
 const FLAME_PROPS = new Set<PropType>(['brazier']);
-const SHIMMER_PROPS = new Set<PropType>(['crystal', 'shrineStone', 'obelisk', 'runeStone']);
+const SHIMMER_PROPS = new Set<PropType>(['crystal', 'shrineStone', 'obelisk', 'runeStone', 'ancientTree']);
 
 export function hasEmissiveOverlay(type: PropType): boolean {
   return FLAME_PROPS.has(type) || SHIMMER_PROPS.has(type);
@@ -1055,6 +1063,164 @@ const PROP_PAINTERS: Record<PropType, Painter> = {
         rng.range(-spec.h * 0.25, 0),
         rng.range(6, 18), rng.range(3, 9), rng.angle(), 0, TAU,
       );
+      g.fill();
+    }
+  },
+
+  ancientTree: (g, spec, rng) => {
+    shadowBlob(g, spec.w * 0.34, spec.h * 0.06);
+    // Flared roots break the ground line first, so the trunk reads as
+    // impossibly old rather than just "broadTree, bigger".
+    g.fillStyle = '#2c2116';
+    for (const side of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(side * spec.w * 0.06, -spec.h * 0.06);
+      g.quadraticCurveTo(side * spec.w * 0.34, -spec.h * 0.02, side * spec.w * 0.44, 0);
+      g.quadraticCurveTo(side * spec.w * 0.26, -spec.h * 0.16, side * spec.w * 0.12, -spec.h * 0.2);
+      g.closePath();
+      g.fill();
+    }
+    // Gnarled trunk: an irregular tapering silhouette instead of a rectangle.
+    const trunkTop = -spec.h * 0.6;
+    g.fillStyle = '#3a2f22';
+    g.beginPath();
+    g.moveTo(-spec.w * 0.24, 0);
+    g.bezierCurveTo(-spec.w * 0.3, -spec.h * 0.2, -spec.w * 0.14, -spec.h * 0.4, -spec.w * 0.16, trunkTop);
+    g.lineTo(spec.w * 0.16, trunkTop);
+    g.bezierCurveTo(spec.w * 0.15, -spec.h * 0.4, spec.w * 0.3, -spec.h * 0.2, spec.w * 0.24, 0);
+    g.closePath();
+    g.fill();
+    // Bark ridges.
+    g.strokeStyle = alpha(C.void, 0.3);
+    g.lineWidth = 2.5;
+    for (let i = -1; i <= 1; i++) {
+      g.beginPath();
+      g.moveTo(i * spec.w * 0.1, -spec.h * 0.04);
+      g.quadraticCurveTo(i * spec.w * 0.13 + rng.range(-4, 4), -spec.h * 0.3, i * spec.w * 0.08, trunkTop + spec.h * 0.02);
+      g.stroke();
+    }
+    // The hollow: a dark opening with a faint magical glow seated inside —
+    // the live shimmer pass (SHIMMER_PROPS) adds the moving highlight on top.
+    g.fillStyle = '#140f0a';
+    g.beginPath();
+    g.ellipse(-spec.w * 0.02, -spec.h * 0.16, spec.w * 0.1, spec.h * 0.14, 0, 0, TAU);
+    g.fill();
+    g.fillStyle = alpha(C.aetherSoft, 0.4);
+    g.beginPath();
+    g.ellipse(-spec.w * 0.02, -spec.h * 0.16, spec.w * 0.05, spec.h * 0.07, 0, 0, TAU);
+    g.fill();
+    // Canopy: bigger and more irregular than broadTree's, with a couple of
+    // bare, leafless limbs breaking the silhouette — thriving and dying at once.
+    const canopy = rng.pick(['#2f6b47', '#26603c', '#3a7a52']);
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * TAU + rng.range(-0.3, 0.3);
+      const d = spec.w * rng.range(0.14, 0.3);
+      const r = spec.w * rng.range(0.2, 0.3);
+      g.fillStyle = mix(canopy, i < 2 ? C.white : C.void, 0.08);
+      g.beginPath();
+      g.ellipse(Math.cos(a) * d, trunkTop - spec.h * 0.06 + Math.sin(a) * d * 0.5, r, r * 0.8, 0, 0, TAU);
+      g.fill();
+    }
+    g.strokeStyle = '#4b4238';
+    g.lineWidth = 3;
+    g.lineCap = 'round';
+    for (const side of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(side * spec.w * 0.06, trunkTop + spec.h * 0.1);
+      g.quadraticCurveTo(side * spec.w * 0.3, trunkTop - spec.h * 0.02, side * spec.w * 0.4, trunkTop - spec.h * 0.14);
+      g.stroke();
+    }
+  },
+
+  signpost: (g, spec, rng) => {
+    shadowBlob(g, spec.w * 0.5, spec.h * 0.08);
+    g.strokeStyle = '#4a3422';
+    g.lineWidth = 4.5;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(0, 0);
+    g.lineTo(rng.range(-1.5, 1.5), -spec.h * 0.92);
+    g.stroke();
+    // Two weathered arrow planks, drooping slightly with age, pointing along
+    // whatever path the post stands beside — a fork marker, not a literal map.
+    for (const [side, tilt] of [[-1, -0.08], [1, 0.1]] as const) {
+      const y = -spec.h * (0.62 + (side < 0 ? 0.1 : 0));
+      g.save();
+      g.translate(0, y);
+      g.rotate(tilt);
+      g.fillStyle = '#6b5136';
+      g.fillRect(0, -spec.h * 0.07, side * spec.w * 1.5, spec.h * 0.14);
+      g.beginPath();
+      g.moveTo(side * spec.w * 1.5, -spec.h * 0.13);
+      g.lineTo(side * spec.w * 1.86, 0);
+      g.lineTo(side * spec.w * 1.5, spec.h * 0.13);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = alpha(C.void, 0.35);
+      g.lineWidth = 1.4;
+      g.strokeRect(side * spec.w * 0.3, -spec.h * 0.07, side * spec.w * 0.7, spec.h * 0.14);
+      g.restore();
+    }
+  },
+
+  tentGoblin: (g, spec, rng) => {
+    shadowBlob(g, spec.w * 0.46, spec.h * 0.1);
+    // A crooked stake with a filthy rag tied on, leaning off the ridgeline.
+    g.strokeStyle = '#4a3f2e';
+    g.lineWidth = 3.5;
+    g.beginPath();
+    g.moveTo(spec.w * 0.34, -spec.h * 0.62);
+    g.lineTo(spec.w * 0.4, -spec.h);
+    g.stroke();
+    g.fillStyle = rng.pick(['#5c3b2e', '#3f4a2c']);
+    g.beginPath();
+    g.moveTo(spec.w * 0.4, -spec.h);
+    g.lineTo(spec.w * 0.56, -spec.h * 0.88);
+    g.lineTo(spec.w * 0.4, -spec.h * 0.76);
+    g.closePath();
+    g.fill();
+    // Lumpy patched hide, not a clean cone — this is scavenged, not built.
+    const hide = rng.pick(['#5a5236', '#4f4a30', '#645a3a']);
+    g.fillStyle = hide;
+    g.beginPath();
+    const pts = 6;
+    for (let i = 0; i <= pts; i++) {
+      const t = i / pts;
+      const x = -spec.w * 0.46 + t * spec.w * 0.92;
+      const bulge = Math.sin(t * Math.PI) * spec.h * (0.7 + rng.range(-0.06, 0.06));
+      const y = -bulge;
+      if (i === 0) g.moveTo(x, 0);
+      g.lineTo(x, y);
+    }
+    g.lineTo(spec.w * 0.46, 0);
+    g.closePath();
+    g.fill();
+    // Patch seams.
+    g.strokeStyle = alpha(C.void, 0.28);
+    g.lineWidth = 1.6;
+    for (let i = 1; i < pts; i++) {
+      const t = i / pts;
+      g.beginPath();
+      g.moveTo(-spec.w * 0.46 + t * spec.w * 0.92, 0);
+      g.lineTo(-spec.w * 0.1 + t * spec.w * 0.2, -spec.h * 0.6);
+      g.stroke();
+    }
+    // Dark triangular entrance flap.
+    g.fillStyle = '#140f0a';
+    g.beginPath();
+    g.moveTo(-spec.w * 0.14, 0);
+    g.lineTo(0, -spec.h * 0.5);
+    g.lineTo(spec.w * 0.14, 0);
+    g.closePath();
+    g.fill();
+    // Crude stakes pinning the base.
+    g.fillStyle = '#2a2314';
+    for (const x of [-spec.w * 0.42, spec.w * 0.42]) {
+      g.beginPath();
+      g.moveTo(x - 3, 0);
+      g.lineTo(x + 3, 0);
+      g.lineTo(x, -8);
+      g.closePath();
       g.fill();
     }
   },

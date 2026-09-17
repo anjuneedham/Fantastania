@@ -56,6 +56,15 @@ export const whisperingWoods: AreaDef = {
     { type: 'bones', x: 1840, y: 1180 },
     { type: 'bones', x: 1900, y: 1220, variant: 1 },
     { type: 'cart', x: 1260, y: 1720 },
+    // The path fork, where the east-west road crosses the spur north to the Ruins.
+    { type: 'signpost', x: 1300, y: 900 },
+    // The goblin camps read as three goblins standing in a clearing without
+    // these — a scavenged tent turns each into an actual place.
+    { type: 'tentGoblin', x: 1230, y: 1510 },
+    { type: 'tentGoblin', x: 1440, y: 470, variant: 1 },
+    // The Elderwood: a genuine landmark tree instead of more scattered pines,
+    // anchoring the otherwise-empty deep north-east forest.
+    { type: 'ancientTree', x: 2200, y: 280, scale: 1.15 },
   ],
 
   scatter: [
@@ -138,6 +147,10 @@ export const whisperingWoods: AreaDef = {
     {
       id: 'ww_hollow', name: 'The Rotting Hollow', x: 2000, y: 1400, radius: 240,
     },
+    {
+      id: 'ww_elderwood', name: 'The Elderwood', x: 2200, y: 280, radius: 200,
+      message: 'One tree here is older than the rest put together, and it is listening.',
+    },
   ],
 
   secrets: [
@@ -152,6 +165,14 @@ export const whisperingWoods: AreaDef = {
       name: 'The Hollow Tree',
       message: 'Somebody hid something in here and never came back for it.',
       reward: { xp: 60, itemId: 'potionGreaterHealth', count: 2 },
+    },
+    {
+      id: 'ww_elderwood_hollow', x: 2200, y: 280, radius: 90,
+      name: "The Elder's Hollow",
+      message:
+        'The hollow in the ancient trunk is warm, and faintly lit, and definitely was not ' +
+        'like that a moment ago.',
+      reward: { xp: 130, gold: 55, itemId: 'aetherShard', count: 3 },
     },
   ],
 

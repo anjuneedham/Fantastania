@@ -56,6 +56,7 @@ export const homestead: AreaDef = {
     { type: 'stump', x: 1180, y: 480 },
     { type: 'broadTree', x: 300, y: 1040 },
     { type: 'broadTree', x: 1480, y: 320, variant: 1 },
+    { type: 'signpost', x: 1600, y: 660 },
   ],
 
   scatter: [
