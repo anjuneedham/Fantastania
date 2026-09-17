@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Fantastania's mark: an aether shard held inside a broken ward-ring. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b2150"/>
+      <stop offset="60%" stop-color="#0b0e22"/>
+      <stop offset="100%" stop-color="#05060c"/>
+    </linearGradient>
+    <linearGradient id="shard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c9fff4"/>
+      <stop offset="40%" stop-color="#5fe6d0"/>
+      <stop offset="100%" stop-color="#1f6f68"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="46%" r="46%">
+      <stop offset="0%" stop-color="#5fe6d0" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#5fe6d0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <circle cx="256" cy="248" r="190" fill="url(#glow)"/>
+
+  <!-- Ward ring, deliberately broken at the lower right. -->
+  <circle cx="256" cy="248" r="168" fill="none" stroke="#3b4576" stroke-width="7"
+          stroke-dasharray="700 150" stroke-linecap="round" transform="rotate(-24 256 248)"/>
+  <circle cx="256" cy="248" r="192" fill="none" stroke="#232a52" stroke-width="4"
+          stroke-dasharray="40 26" opacity="0.8"/>
+
+  <!-- The shard. -->
+  <path d="M256 66 L352 214 L256 452 L160 214 Z" fill="url(#shard)"/>
+  <path d="M256 66 L352 214 L256 258 Z" fill="#dffff8" opacity="0.5"/>
+  <path d="M160 214 L352 214" stroke="#05060c" stroke-width="8" opacity="0.45"/>
+  <path d="M256 66 L256 452" stroke="#05060c" stroke-width="5" opacity="0.28"/>
+
+  <!-- Embers: the warm counterpoint to the cold aether. -->
+  <circle cx="132" cy="352" r="9" fill="#ff9a4d" opacity="0.85"/>
+  <circle cx="392" cy="318" r="6" fill="#ffd68a" opacity="0.8"/>
+  <circle cx="356" cy="404" r="4" fill="#ff9a4d" opacity="0.6"/>
+</svg>
