@@ -23,6 +23,28 @@ export const arcaneCaves: AreaDef = {
   seed: 0x77e2,
   size: { w: 2200, h: 2200 },
 
+  // Aether-soaked floor under each of the three resonance stones, so the
+  // puzzle's geometry is legible from across the chamber — the player can see
+  // the triangle before being told there is one. The still pool is placed off
+  // the chamber's through-route, so it reads as depth rather than a roadblock.
+  terrain: [
+    {
+      kind: 'arcane',
+      blobs: [
+        { x: 1060, y: 900, r: 62 },
+        { x: 1340, y: 1240, r: 62 },
+        { x: 1180, y: 1120, r: 72 },
+      ],
+    },
+    {
+      kind: 'water',
+      blobs: [
+        { x: 1078, y: 1402, r: 68 },
+        { x: 1150, y: 1432, r: 48 },
+      ],
+    },
+  ],
+
   walls: [
     { x: 0, y: 0, w: 2200, h: 120 },
     { x: 0, y: 2080, w: 2200, h: 120 },

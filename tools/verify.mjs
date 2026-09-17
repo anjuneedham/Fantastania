@@ -262,6 +262,88 @@ scenario('world-boundary-corners', 'desktop', async (page, t) => {
       : `held a diagonal into all 4 corners of all ${areaIds.length} areas with no escape`);
 });
 
+/**
+ * Terrain (ponds, bogs, burns, flagstone) is drawn from the same circles that
+ * become collision, so solid terrain is real geometry, not decoration. Two
+ * things must hold for every area: solid terrain actually stops the player,
+ * and no spawn point or portal was authored inside it — a spawn inside water
+ * strands the player on load, and a portal inside it makes a whole region
+ * unreachable. Both are data mistakes that are invisible until someone walks
+ * there, so they are checked against the live collision system, not re-derived.
+ */
+scenario('terrain-placement', 'desktop', async (page, t) => {
+  await t.waitForBoot(page);
+  const areaIds = Object.keys(await page.evaluate(() => window.fantastania.areas));
+
+  const blocked = [];
+  let terrainAreas = 0;
+  let solidBlobs = 0;
+
+  for (const areaId of areaIds) {
+    const report = await page.evaluate(async (id) => {
+      const s = window.fantastania.game.scenes.active;
+      await s.enterArea(id, 'default', false);
+      const def = s.area.def;
+      const bad = [];
+      const solid = (def.terrain ?? []).filter((p) => p.kind === 'water');
+      // Deliberately scoped to solid terrain rather than all collision:
+      // portals are proximity triggers and several are authored *inside* the
+      // boundary walls on purpose, which is long-standing design, not a bug.
+      // What must never happen is one sitting in water.
+      const r = s.player.radius;
+      const inWater = (x, y) => solid.some((patch) => patch.blobs.some((b) => {
+        const reach = b.r * 0.9 + r;
+        return (x - b.x) ** 2 + (y - b.y) ** 2 < reach * reach;
+      }));
+      for (const [name, sp] of Object.entries(def.spawnPoints ?? {})) {
+        if (inWater(sp.x, sp.y)) bad.push(`${id} spawn '${name}'`);
+      }
+      for (const p of def.portals ?? []) {
+        if (inWater(p.x, p.y)) bad.push(`${id} portal '${p.id}'`);
+      }
+      for (const n of def.npcs ?? []) {
+        if (inWater(n.x, n.y)) bad.push(`${id} npc '${n.npcId}'`);
+      }
+      for (const c of def.chests ?? []) {
+        if (inWater(c.x, c.y)) bad.push(`${id} chest '${c.id}'`);
+      }
+      return {
+        bad,
+        hasTerrain: (def.terrain ?? []).length > 0,
+        solidBlobs: solid.reduce((n, p) => n + p.blobs.length, 0),
+      };
+    }, areaId);
+    blocked.push(...report.bad);
+    if (report.hasTerrain) terrainAreas++;
+    solidBlobs += report.solidBlobs;
+  }
+
+  t.assert(terrainAreas === areaIds.length,
+    `every area has authored terrain (${terrainAreas}/${areaIds.length})`);
+  t.assert(blocked.length === 0,
+    blocked.length
+      ? `authored inside solid terrain: ${blocked.join('; ')}`
+      : 'no spawn point or portal sits inside solid terrain');
+  t.assert(solidBlobs > 0, `solid water exists to collide with (${solidBlobs} blobs)`);
+
+  // Walk south into the Homestead pond and confirm the water stops the player.
+  const pond = await page.evaluate(async () => {
+    const s = window.fantastania.game.scenes.active;
+    await s.enterArea('homestead', 'default', false);
+    const blob = s.area.def.terrain.find((p) => p.kind === 'water').blobs[0];
+    s.player.x = blob.x;
+    s.player.y = blob.y - blob.r - 80;
+    return blob;
+  });
+  await page.keyboard.down('KeyS');
+  await page.waitForTimeout(1500);
+  await page.keyboard.up('KeyS');
+  const after = await t.playerPos(page);
+  const dist = Math.hypot(after.x - pond.x, after.y - pond.y);
+  t.assert(dist > pond.r * 0.9,
+    `deep water stopped the player (${dist.toFixed(1)} from centre, water ends at ${(pond.r * 0.9).toFixed(1)})`);
+});
+
 scenario('area-population', 'desktop', async (page, t) => {
   await t.waitForBoot(page);
   const info = await page.evaluate(() => {
@@ -667,7 +749,7 @@ scenario('npc-dialogue', 'desktop', async (page, t) => {
     s.player.y = mira.y + 40;
     return { npcCount: npcs.length, marker: mira.questMarker };
   });
-  t.assert(setup.npcCount === 3, `the Homestead is populated (${setup.npcCount} NPCs)`);
+  t.assert(setup.npcCount === 4, `the Homestead is populated (${setup.npcCount} NPCs)`);
   t.assert(setup.marker === 'offer', `Mira advertises her quest (marker: ${setup.marker})`);
 
   // Walk the conversation to the point where the quest is offered and take it.

@@ -69,13 +69,32 @@ const hexCache = new Map<string, [number, number, number]>();
 function parseHex(hex: string): [number, number, number] {
   const cached = hexCache.get(hex);
   if (cached) return cached;
-  const h = hex.replace('#', '');
-  const full = h.length === 3 ? h[0] + h[0] + h[1] + h[1] + h[2] + h[2] : h;
-  const rgb: [number, number, number] = [
-    parseInt(full.slice(0, 2), 16),
-    parseInt(full.slice(2, 4), 16),
-    parseInt(full.slice(4, 6), 16),
-  ];
+
+  let rgb: [number, number, number];
+  if (hex.charCodeAt(0) === 114 /* 'r' */) {
+    // `mix`/`lighten`/`darken` hand back `rgb(...)` strings, and callers nest
+    // them inside `alpha()` naturally — `alpha(lighten(c, 0.3), 0.5)`. Without
+    // this branch that parsed as hex, produced `rgba(NaN,NaN,NaN,a)`, and
+    // Canvas *silently ignores* an invalid style assignment: the shape then
+    // drew in whatever colour happened to be set last. It failed quietly and
+    // looked like a shading bug, so it is handled here, once, rather than by
+    // asking every call site to remember which helper returns which format.
+    const parts = hex.slice(hex.indexOf('(') + 1, hex.lastIndexOf(')')).split(',');
+    rgb = [
+      parseInt(parts[0], 10) || 0,
+      parseInt(parts[1], 10) || 0,
+      parseInt(parts[2], 10) || 0,
+    ];
+  } else {
+    const h = hex.replace('#', '');
+    const full = h.length === 3 ? h[0] + h[0] + h[1] + h[1] + h[2] + h[2] : h;
+    rgb = [
+      parseInt(full.slice(0, 2), 16),
+      parseInt(full.slice(2, 4), 16),
+      parseInt(full.slice(4, 6), 16),
+    ];
+  }
+
   hexCache.set(hex, rgb);
   return rgb;
 }

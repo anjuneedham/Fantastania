@@ -92,6 +92,25 @@ export class WorldScene extends Scene {
     this.rewards.onLoot = (enemyId, level, x, y) => this.dropLoot(enemyId, level, x, y);
     this.unsubscribes.push(
       bus.on('enemyKilled', () => this.markSpawnCleared()),
+      // Healing and levelling had no visual at all before this — a toast was
+      // the only feedback. Both effects live here rather than in
+      // InventorySystem/AbilitySystem/RewardSystem because those are
+      // decoupled from rendering on purpose; this scene is the one place that
+      // already owns both `world.particles` and the player's position.
+      bus.on('playerHealed', () => {
+        const p = this.player;
+        this.world.particles.emit('leaf', p.x, p.y - p.sprite.height * 0.3, 10, C.verdant, {
+          speed: 40, spread: Math.PI * 0.6, angle: -Math.PI / 2, rise: 60, life: 0.9, size: 4,
+        });
+        this.world.particles.ring(p.x, p.y, p.radius * 2.2, C.verdant, 0.5);
+      }),
+      bus.on('levelUp', () => {
+        const p = this.player;
+        this.world.particles.emit('rune', p.x, p.y - p.sprite.height * 0.5, 14, C.gold, {
+          speed: 70, spread: Math.PI * 2, rise: 50, life: 1.1, size: 5,
+        });
+        this.world.particles.ring(p.x, p.y, p.radius * 2.6, C.gold, 0.7);
+      }),
     );
 
     // Resume health and mana from the save rather than arriving at full.
@@ -535,7 +554,7 @@ export class WorldScene extends Scene {
 
     ctx.save();
     camera.apply(r);
-    this.renderer.renderGround(ctx, camera, r);
+    this.renderer.renderGround(ctx, camera, r, this.game.realTime);
     this.renderer.renderGlows(ctx, this.world, camera, r, this.game.realTime);
     this.world.render(ctx, r.quality, camera.visibleRect(r, 120));
     this.renderer.renderEmissive(ctx, this.world, camera, r, this.game.realTime);

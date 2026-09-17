@@ -210,9 +210,11 @@ export class DialogueSystem {
           this.shopRequested = true;
           break;
         case 'heal': {
+          const healed = player.maxHealth - player.health;
           player.health = player.maxHealth;
           player.mana = player.maxMana;
           player.clearStatuses();
+          if (healed > 0) bus.emit('playerHealed', { amount: healed });
           bus.emit('toast', { text: 'You feel whole again.', color: C.verdant, icon: '✚' });
           break;
         }

@@ -23,6 +23,30 @@ export const forgottenShrine: AreaDef = {
   seed: 0x5d0c,
   size: { w: 1800, h: 1500 },
 
+  // "A terrace of pale stone, perfectly kept" — the description's words, which
+  // the ground never actually showed. The flagstone reaches to the balustrade
+  // and stops, so the terrace has an edge you can see; the aether beneath the
+  // shrine stone is the only place in the game where the magic is in the floor
+  // rather than in an object standing on it.
+  terrain: [
+    {
+      kind: 'stone',
+      blobs: [
+        { x: 900, y: 750, r: 292 },
+        { x: 606, y: 750, r: 188 },
+        { x: 1194, y: 750, r: 188 },
+        { x: 900, y: 470, r: 170 },
+        { x: 900, y: 1030, r: 170 },
+      ],
+    },
+    {
+      kind: 'arcane',
+      blobs: [
+        { x: 900, y: 706, r: 112 },
+      ],
+    },
+  ],
+
   walls: [
     { x: 0, y: 0, w: 1800, h: 140 },
     { x: 0, y: 1360, w: 1800, h: 140 },

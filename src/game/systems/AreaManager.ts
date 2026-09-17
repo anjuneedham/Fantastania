@@ -1,4 +1,5 @@
 import { PROPS, type PropType } from '../../art/environment';
+import { TERRAIN, TERRAIN_COLLIDE_SCALE, inTerrain } from '../../art/terrain';
 import { Rng } from '../../engine/Rng';
 import { dist2, pointInRect } from '../../engine/math';
 import type {
@@ -44,6 +45,15 @@ export function loadArea(world: World, areaId: string): LoadedArea {
 
   for (const wall of def.walls ?? []) {
     world.obstacles.push({ kind: 'rect', x: wall.x, y: wall.y, w: wall.w, h: wall.h });
+  }
+
+  // Solid terrain is collision, not decoration: deep water blocks exactly the
+  // shape that gets drawn, because both come from the same circles.
+  for (const patch of def.terrain ?? []) {
+    if (!TERRAIN[patch.kind].solid) continue;
+    for (const b of patch.blobs) {
+      world.obstacles.push({ kind: 'circle', x: b.x, y: b.y, r: b.r * TERRAIN_COLLIDE_SCALE });
+    }
   }
 
   placeProps(world, def);
@@ -205,6 +215,10 @@ function placeProps(world: World, def: AreaDef): void {
 
       if (inAnyRect(x, y, def.clearings)) continue;
       if (inAnyRect(x, y, def.walls)) continue;
+      // Nothing grows in a pool, a bog or a burn — and a tree standing in
+      // water is the single most obvious way procedural scatter gives itself
+      // away. The pad keeps trunks off the bank as well as out of the water.
+      if (inTerrain(x, y, def.terrain, 18)) continue;
       if (nearReserved(x, y, def, 110)) continue;
       if (tooClose(x, y, placed, spacing)) continue;
 

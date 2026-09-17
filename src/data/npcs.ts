@@ -211,6 +211,10 @@ export const NPCS: Record<string, NpcDef> = {
       secondary: '#ff9a4d',
       legs: '#3b2a1c',
       accent: C.ember,
+      // A scorched leather apron and a beard are what turn "generic bulky
+      // NPC with an axe" into "blacksmith" at a glance.
+      apron: '#3b2a1c',
+      beard: '#241a12',
       eyeColor: '#241a12',
       weapon: { kind: 'axe', length: 0.5, color: '#b9bdc8' },
     },
@@ -715,6 +719,48 @@ export const NPCS: Record<string, NpcDef> = {
         },
         idle: {
           text: '"You are early. Or the shrine is late. It is difficult, from here, to tell."',
+        },
+      },
+    },
+  },
+
+  bram: {
+    id: 'bram',
+    name: 'Bram',
+    title: 'Watches the Road',
+    wanderRadius: 40,
+    sprite: {
+      shape: 'humanoid',
+      height: 47,
+      build: 1.2,
+      skin: '#b98866',
+      hair: '#3a2f22',
+      primary: '#3a4a3e',
+      secondary: '#5c4630',
+      legs: '#2a332a',
+      accent: '#8a9a8a',
+      // A helmet and sword read as "guard" before the player is close enough
+      // to see a face — the first archetype this game had no visual for.
+      headwear: { kind: 'helmet', color: '#6b6575', accent: '#8a9a8a' },
+      eyeColor: '#241a12',
+      weapon: { kind: 'sword', length: 0.6, color: '#9a9aa8' },
+    },
+    dialogue: {
+      id: 'bram',
+      entries: [
+        { node: 'afterWarden', requires: { flag: 'wardenDefeated' } },
+        { node: 'idle' },
+      ],
+      nodes: {
+        idle: {
+          text:
+            '"The road stays clear on my watch. What happens past the treeline is not my ' +
+            'problem tonight."',
+        },
+        afterWarden: {
+          text:
+            '"Heard you settled something up at the Shrine." He does not look away from the ' +
+            'treeline. "My watch has not gotten any shorter for it."',
         },
       },
     },

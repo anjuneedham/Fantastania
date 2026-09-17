@@ -20,6 +20,18 @@ export interface WeaponVisual {
   glow?: string;
 }
 
+/**
+ * Headwear reads before anything else at sprite scale, so it is the cheapest
+ * way to sell a non-combat role (guard, spellcaster) without touching weapon
+ * or colour data. Kept to the archetypes actually in use — like `WeaponVisual`,
+ * new kinds are additive, not speculative.
+ */
+export interface Headwear {
+  kind: 'helmet' | 'wizardHat';
+  color: string;
+  accent?: string;
+}
+
 export interface ActorSprite {
   shape: ActorShape;
   /** Feet-to-crown height in world units. */
@@ -36,6 +48,10 @@ export interface ActorSprite {
   cloak?: string;
   hood?: boolean;
   horns?: boolean;
+  /** Worn over the torso; also suppresses the chest emblem, which would clash. */
+  apron?: string;
+  beard?: string;
+  headwear?: Headwear;
   eyeColor?: string;
   eyeCount?: number;
   /** Eyes that emit light (spirits, corrupted things). Default false. */
@@ -340,8 +356,11 @@ function drawHumanoid(ctx: CanvasRenderingContext2D, s: ActorSprite, p: ActorPos
 
   if (bone) drawRibs(ctx, w, shoulderY, hipY, s.skin);
 
+  if (s.apron) drawApron(ctx, s.apron, w, shoulderY, hipY, h);
+
   // Chest emblem in the accent colour; tiny, but it individualises characters.
-  if (front > -0.3 && !bone) {
+  // Skipped under an apron — the two sit in the same space and clash.
+  if (front > -0.3 && !bone && !s.apron) {
     ctx.fillStyle = alpha(s.accent, 0.9);
     ctx.beginPath();
     ctx.moveTo(0, shoulderY + h * 0.08);
@@ -445,8 +464,11 @@ function drawHead(
           ctx.fill();
         }
       }
+      if (s.beard) drawBeard(ctx, s.beard, r);
     }
   }
+
+  if (s.headwear) drawHeadwear(ctx, s.headwear, r, flip);
 
   if (s.horns) {
     ctx.fillStyle = mix(s.skin, C.void, 0.45);
@@ -600,6 +622,93 @@ function drawRibs(
     ctx.quadraticCurveTo(0, yy + w * 0.16, w * 0.55, yy);
     ctx.stroke();
   }
+}
+
+/** A bib-and-strap apron worn over the torso: the tell for a working trade. */
+function drawApron(
+  ctx: CanvasRenderingContext2D,
+  color: string,
+  w: number,
+  shoulderY: number,
+  hipY: number,
+  h: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.5, shoulderY + h * 0.14);
+  ctx.lineTo(w * 0.5, shoulderY + h * 0.14);
+  ctx.lineTo(w * 0.42, hipY + h * 0.05);
+  ctx.lineTo(-w * 0.42, hipY + h * 0.05);
+  ctx.closePath();
+  fillOutlined(ctx, color, h * 0.02, 0.4);
+  // Neck straps.
+  ctx.strokeStyle = darken(color, 0.3);
+  ctx.lineWidth = h * 0.015;
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.14, shoulderY + h * 0.14);
+  ctx.lineTo(-w * 0.08, shoulderY - h * 0.02);
+  ctx.moveTo(w * 0.14, shoulderY + h * 0.14);
+  ctx.lineTo(w * 0.08, shoulderY - h * 0.02);
+  ctx.stroke();
+  // A pocket band — a flat rectangle alone reads as a bib, not a tool apron.
+  ctx.fillStyle = darken(color, 0.2);
+  ctx.fillRect(-w * 0.3, hipY - h * 0.12, w * 0.6, h * 0.05);
+}
+
+/** Helmet or wizard hat, drawn over the finished head in head-local space. */
+function drawHeadwear(
+  ctx: CanvasRenderingContext2D,
+  hw: Headwear,
+  r: number,
+  flip: number,
+): void {
+  switch (hw.kind) {
+    case 'helmet': {
+      // A rounded steel dome low over the brow, with a nose guard — reads as
+      // "guard" from silhouette alone, no face detail required.
+      ctx.beginPath();
+      ctx.arc(0, -r * 0.05, r * 1.05, Math.PI * 1.02, Math.PI * 1.98);
+      ctx.closePath();
+      ctx.fillStyle = hw.color;
+      ctx.fill();
+      ctx.strokeStyle = darken(hw.color, 0.4);
+      ctx.lineWidth = r * 0.05;
+      ctx.stroke();
+      ctx.fillStyle = hw.accent ?? darken(hw.color, 0.25);
+      ctx.fillRect(-r * 1.05, -r * 0.14, r * 2.1, r * 0.2);
+      ctx.fillStyle = darken(hw.color, 0.15);
+      ctx.fillRect(-r * 0.08, -r * 0.06, r * 0.16, r * 0.6);
+      break;
+    }
+    case 'wizardHat': {
+      // A tall cone with a lean and a wide brim — reads as "spellcaster"
+      // before any staff or robe is in view.
+      ctx.beginPath();
+      ctx.moveTo(-r * 1.2, -r * 0.32);
+      ctx.quadraticCurveTo(-r * 0.15, -r * 0.7, r * 0.35 * flip, -r * 2.5);
+      ctx.quadraticCurveTo(r * 0.35, -r * 0.7, r * 1.2, -r * 0.32);
+      ctx.closePath();
+      fillOutlined(ctx, hw.color, r * 0.08);
+      ctx.fillStyle = darken(hw.color, 0.2);
+      ctx.beginPath();
+      ctx.ellipse(0, -r * 0.32, r * 1.5, r * 0.3, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = hw.accent ?? C.gold;
+      ctx.fillRect(-r * 1.0, -r * 0.55, r * 2.0, r * 0.15);
+      break;
+    }
+  }
+}
+
+/** A simple chin beard, drawn under the jaw in head-local space. */
+function drawBeard(ctx: CanvasRenderingContext2D, color: string, r: number): void {
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.42, r * 0.12);
+  ctx.quadraticCurveTo(-r * 0.3, r * 0.85, 0, r * 0.95);
+  ctx.quadraticCurveTo(r * 0.3, r * 0.85, r * 0.42, r * 0.12);
+  ctx.quadraticCurveTo(0, r * 0.35, -r * 0.42, r * 0.12);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
 }
 
 function drawWeapon(

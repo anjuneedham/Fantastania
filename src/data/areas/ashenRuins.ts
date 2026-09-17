@@ -24,6 +24,27 @@ export const ashenRuins: AreaDef = {
   seed: 0x2c81,
   size: { w: 2400, h: 1900 },
 
+  // The burn line. This area's whole premise is a fire that came from one
+  // direction and stopped, and the layout was already built around a
+  // north-south line the player can follow — but there was nothing on the
+  // ground to follow. It is widest at the north gate and narrows going south,
+  // so walking it backwards tells you where the fire came from without a
+  // single line of dialogue.
+  terrain: [
+    {
+      kind: 'ash',
+      blobs: [
+        { x: 1220, y: 320, r: 152 },
+        { x: 1218, y: 520, r: 130 },
+        { x: 1212, y: 720, r: 112 },
+        { x: 1226, y: 920, r: 96 },
+        { x: 1220, y: 1120, r: 82 },
+        { x: 1222, y: 1320, r: 68 },
+        { x: 1214, y: 1500, r: 54 },
+      ],
+    },
+  ],
+
   walls: [
     { x: 0, y: 0, w: 2400, h: 100 },
     { x: 0, y: 1800, w: 2400, h: 100 },

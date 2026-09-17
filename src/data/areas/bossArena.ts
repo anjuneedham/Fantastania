@@ -22,6 +22,20 @@ export const bossArena: AreaDef = {
   seed: 0x1f44,
   size: { w: 1400, h: 1200 },
 
+  // "Worn smooth in a circle by something that has been pacing it." The arena
+  // was a bare terrace with that written about it; this is the pacing, on the
+  // floor. It also pushes the rubble scatter out to the rim, which leaves the
+  // fighting surface clean — exactly what a no-cover duel needs.
+  terrain: [
+    {
+      kind: 'ash',
+      blobs: [
+        { x: 700, y: 600, r: 326 },
+        { x: 700, y: 430, r: 190 },
+      ],
+    },
+  ],
+
   walls: [
     { x: 0, y: 0, w: 1400, h: 160 },
     { x: 0, y: 1040, w: 1400, h: 160 },

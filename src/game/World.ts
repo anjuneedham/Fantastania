@@ -337,14 +337,18 @@ export class World implements WorldLike {
         event.crit,
       );
     }
-    this.particles.emit('spark', target.x, target.y - target.sprite.height * 0.55,
+    const hitKind = HIT_PARTICLE_KIND[event.type] ?? 'spark';
+    this.particles.emit(hitKind, target.x, target.y - target.sprite.height * 0.55,
       event.crit ? 12 : 7, color, {
         speed: event.crit ? 190 : 130,
         angle: event.angle,
         spread: 1.5,
-        size: 2.6,
-        life: 0.34,
+        size: hitKind === 'rune' ? 4 : hitKind === 'leaf' ? 3.4 : 2.6,
+        life: hitKind === 'spark' ? 0.34 : 0.5,
       });
+    // Crits get a second, distinct tell beyond size/speed: a quick ring so a
+    // crit reads as "different", not just "the same hit but bigger".
+    if (event.crit) this.particles.ring(target.x, target.y, target.radius * 1.6, C.gold, 0.3);
 
     bus.emit('damageDealt', {
       targetId: target.id,
@@ -369,10 +373,22 @@ export class World implements WorldLike {
   private killActor(target: Actor, event: DamageEvent): void {
     target.kill();
     target.onKilled(this, event.sourceId);
-    this.particles.emit('smoke', target.x, target.y - target.sprite.height * 0.5, 8,
-      C.deepNight, { speed: 45, size: 7, life: 0.9 });
-    this.particles.emit('shard', target.x, target.y - target.sprite.height * 0.4, 10,
+
+    // Bosses and elites get a death that matches their weight on screen — a
+    // duck-typed check (matching `mitigateIncoming` above) rather than an
+    // import, since Actor covers the player too and neither field applies there.
+    const isBoss = 'isBoss' in target && (target as unknown as { isBoss: boolean }).isBoss;
+    const isElite = 'elite' in target && (target as unknown as { elite: boolean }).elite;
+    const scale = isBoss ? 2.4 : isElite ? 1.5 : 1;
+
+    this.particles.emit('smoke', target.x, target.y - target.sprite.height * 0.5, Math.round(8 * scale),
+      C.deepNight, { speed: 45, size: 7 * scale, life: 0.9 });
+    this.particles.emit('shard', target.x, target.y - target.sprite.height * 0.4, Math.round(10 * scale),
       target.sprite.accent, { speed: 150, angle: event.angle, spread: 2.4, size: 4, life: 0.7 });
+    if (isBoss) {
+      this.particles.ring(target.x, target.y, target.radius * 3, C.blood, 0.6);
+      this.shake(14);
+    }
     if (target.faction === 'player') {
       this.sfx('player_die');
       this.shake(10);
@@ -530,4 +546,19 @@ const DAMAGE_COLORS: Record<string, string> = {
   arcane: C.aether,
   nature: C.verdant,
   shadow: C.violet,
+};
+
+/**
+ * Which hit particle shape reads as which element — physical was the only
+ * damage type with a distinct hit effect before this; fire, arcane, nature
+ * and shadow all used the same spark, tinted. `ParticleSystem` already
+ * special-cases these kinds (embers rise, leaves tumble), so this is a
+ * one-line hookup rather than new particle code.
+ */
+const HIT_PARTICLE_KIND: Record<string, ParticleKind> = {
+  physical: 'spark',
+  fire: 'ember',
+  arcane: 'rune',
+  nature: 'leaf',
+  shadow: 'smoke',
 };
