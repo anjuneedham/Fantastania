@@ -80,19 +80,28 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     themeColor: C.gold,
     healthRegen: 1.2,
 
+    // Eric reads warm and grounded on purpose — oxblood leather, brass and
+    // ember-gold instead of the "generic blue-and-silver knight" this was
+    // before. It is the physical half of a deliberate warm/cool split
+    // against Lev (see his sprite below): Eric is hearth and iron, nothing
+    // about him glows, which is the visual joke underneath "the aether has
+    // started answering him lately, which he finds deeply suspicious" — he
+    // looks like the last person in Aetheria this should be happening to.
     sprite: {
       shape: 'humanoid',
-      height: 46,
-      build: 1.14,
+      height: 48,
+      build: 1.18,
       skin: '#d9a884',
       hair: '#5b3a24',
-      primary: '#2f5d8a',
-      secondary: '#c9a227',
-      legs: '#4a3f2e',
-      accent: C.gold,
-      cloak: '#1d3e5e',
+      primary: '#6b3226',
+      secondary: '#8a6b3a',
+      legs: '#3a2f22',
+      accent: '#e8b23d',
+      cloak: '#4a2c22',
       eyeColor: '#241a12',
-      weapon: { kind: 'sword', length: 0.62, color: '#c9ccd8' },
+      // A plain, unglowing steel blade is the point: everything about Eric
+      // is deliberately mundane except the one thing he cannot control.
+      weapon: { kind: 'sword', length: 0.68, color: '#9a9aa8' },
     },
   },
 
@@ -161,20 +170,29 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     themeColor: C.aether,
     healthRegen: 0.7,
 
+    // Lev is the cool half of that same split: deep violet-black instead of
+    // Eric's browns, aether-teal instead of his brass. No hood — Lev's own
+    // lore ("runs first, explains later", chatty and improvisational) is the
+    // opposite of a brooding, face-hidden mystic, so the tell is the aura
+    // instead: a faint aether glow around him at all times, the one thing
+    // Eric can never have. Between the glow, the glowing eyes and the lit
+    // staff-tip, Lev reads as "the magic one" from a silhouette alone, at
+    // any sprite size, without needing a second look at his colours.
     sprite: {
       shape: 'humanoid',
       height: 43,
-      build: 0.92,
+      build: 0.9,
       skin: '#c98f6b',
-      hair: '#1f1b2e',
-      primary: '#3a2f6b',
+      hair: '#241c47',
+      primary: '#2a2154',
       secondary: '#5fe6d0',
-      legs: '#2b2440',
+      legs: '#1c1730',
       accent: C.aether,
-      cloak: '#241c47',
+      cloak: '#1c1440',
       eyeColor: C.aetherSoft,
       eyeGlow: true,
-      weapon: { kind: 'staff', length: 0.78, color: '#7a5b3a', glow: C.aether },
+      aura: { color: C.aether, radius: 40, intensity: 0.28 },
+      weapon: { kind: 'staff', length: 0.8, color: '#8a6a42', glow: C.aether },
     },
   },
 };
