@@ -1,6 +1,7 @@
 import {
   BIOMES, drawPropEmissive, drawPropGlow, groundPattern, hasEmissiveOverlay,
 } from '../art/environment';
+import { drawTerrainGlow, drawTerrainPatch } from '../art/terrain';
 import { C, alpha } from '../art/palette';
 import { TAU } from '../engine/math';
 import { fx } from '../engine/Rng';
@@ -49,7 +50,7 @@ export class WorldRenderer {
   }
 
   /** Ground pass. Call with the camera transform applied. */
-  renderGround(ctx: CanvasRenderingContext2D, camera: Camera, r: Renderer): void {
+  renderGround(ctx: CanvasRenderingContext2D, camera: Camera, r: Renderer, time: number): void {
     if (!this.area) return;
     const biome = BIOMES[this.area.biome];
     const view = camera.visibleRect(r, 96);
@@ -84,6 +85,16 @@ export class WorldRenderer {
       ctx.beginPath();
       ctx.arc(0, 0, rx, 0, TAU);
       ctx.fill();
+      ctx.restore();
+    }
+
+    // Terrain sits over the worn-path wash (a road may run down to a ford, but
+    // a road never runs over a pond) and under the walls, which are raised.
+    if (this.area.terrain) {
+      for (const patch of this.area.terrain) drawTerrainPatch(ctx, patch, view, time);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const patch of this.area.terrain) drawTerrainGlow(ctx, patch, view, time);
       ctx.restore();
     }
 

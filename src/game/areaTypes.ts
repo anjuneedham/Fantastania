@@ -1,4 +1,5 @@
 import type { BiomeId, PropType } from '../art/environment';
+import type { TerrainPatch } from '../art/terrain';
 
 /**
  * The area schema.
@@ -173,6 +174,12 @@ export interface AreaDef {
   /** Safe areas suppress hostile spawns and regenerate the player faster. */
   safe?: boolean;
 
+  /**
+   * Ground terrain: pools, bogs, burns, flagstone. Drawn over the biome
+   * ground, under everything else. Solid kinds (deep water) become collision
+   * automatically, so a pond is a barrier without any hand-authored wall.
+   */
+  terrain?: TerrainPatch[];
   /** Hand-placed collision geometry (cliff walls, buildings, chasms). */
   walls?: AreaRect[];
   /** Hand-placed landmark props. */

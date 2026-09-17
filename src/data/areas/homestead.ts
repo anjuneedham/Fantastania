@@ -23,6 +23,28 @@ export const homestead: AreaDef = {
   size: { w: 1800, h: 1300 },
   safe: true,
 
+  // The village pond, in the open ground south of the road. Nine families and
+  // "one well" per the description — the well is for drinking, this is where
+  // everything else happens. Deep water, so it is also the first thing in the
+  // game that teaches the player that terrain can stop them.
+  terrain: [
+    {
+      kind: 'water',
+      blobs: [
+        { x: 1000, y: 1060, r: 88 },
+        { x: 1088, y: 1038, r: 58 },
+        { x: 936, y: 1102, r: 52 },
+      ],
+    },
+    {
+      kind: 'shallowWater',
+      blobs: [
+        { x: 1146, y: 1024, r: 38 },
+        { x: 892, y: 1010, r: 32 },
+      ],
+    },
+  ],
+
   walls: [
     // Ridge along the north and south, funnelling the player east.
     { x: 0, y: 0, w: 1800, h: 120 },

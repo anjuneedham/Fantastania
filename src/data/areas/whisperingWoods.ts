@@ -22,6 +22,32 @@ export const whisperingWoods: AreaDef = {
   seed: 0x9ab3,
   size: { w: 2600, h: 2000 },
 
+  // The Rotting Hollow is named as a landmark and described as rotting, but
+  // until now the ground there was the same as everywhere else in the forest.
+  // The bog is what the name was always promising. The brook is a second job:
+  // it crosses the main east-west road, so the player wades once on the way
+  // in and the road stops being a featureless corridor.
+  terrain: [
+    {
+      kind: 'bog',
+      blobs: [
+        { x: 2030, y: 1400, r: 132 },
+        { x: 1898, y: 1332, r: 86 },
+        { x: 2142, y: 1476, r: 78 },
+        { x: 1946, y: 1494, r: 70 },
+      ],
+    },
+    {
+      kind: 'shallowWater',
+      blobs: [
+        { x: 1750, y: 980, r: 68 },
+        { x: 1742, y: 876, r: 52 },
+        { x: 1762, y: 1084, r: 54 },
+        { x: 1752, y: 1178, r: 42 },
+      ],
+    },
+  ],
+
   walls: [
     { x: 0, y: 0, w: 2600, h: 100 },
     { x: 0, y: 1900, w: 2600, h: 100 },

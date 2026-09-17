@@ -554,7 +554,7 @@ export class WorldScene extends Scene {
 
     ctx.save();
     camera.apply(r);
-    this.renderer.renderGround(ctx, camera, r);
+    this.renderer.renderGround(ctx, camera, r, this.game.realTime);
     this.renderer.renderGlows(ctx, this.world, camera, r, this.game.realTime);
     this.world.render(ctx, r.quality, camera.visibleRect(r, 120));
     this.renderer.renderEmissive(ctx, this.world, camera, r, this.game.realTime);
