@@ -667,7 +667,7 @@ scenario('npc-dialogue', 'desktop', async (page, t) => {
     s.player.y = mira.y + 40;
     return { npcCount: npcs.length, marker: mira.questMarker };
   });
-  t.assert(setup.npcCount === 3, `the Homestead is populated (${setup.npcCount} NPCs)`);
+  t.assert(setup.npcCount === 4, `the Homestead is populated (${setup.npcCount} NPCs)`);
   t.assert(setup.marker === 'offer', `Mira advertises her quest (marker: ${setup.marker})`);
 
   // Walk the conversation to the point where the quest is offered and take it.

@@ -88,6 +88,7 @@ export const homestead: AreaDef = {
     { npcId: 'mira', x: 800, y: 620, facing: Math.PI / 2 },
     { npcId: 'garrick', x: 1140, y: 640, facing: Math.PI / 2 },
     { npcId: 'tobin', x: 520, y: 880, facing: 0 },
+    { npcId: 'bram', x: 1640, y: 760, facing: 0 },
   ],
 
   chests: [
